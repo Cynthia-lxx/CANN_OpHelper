@@ -1,19 +1,38 @@
-# Python
+# ── Python ──────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
 .eggs/
 build/
 dist/
+*.egg
 
-# 虚拟环境
+# ── 虚拟环境 ────────────────────────────────────────────
+# 注意：本项目实际使用工作区根 p:\Dev\CANN_Learning_Refs\penv（无点号），不在本仓库内；
+# 以下为防御性规则，防止误建/误入。
 .penv/
+venv/
+.venv/
 
-# 工具缓存与输出
+# ── 测试 / 工具缓存与输出 ───────────────────────────────
 .pytest_cache/
 .out/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
-# IDE
+# ── IDE / 编辑器 / 系统 ─────────────────────────────────
 .idea/
 .vscode/
 *.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 本地临时 / 冒烟产物 ─────────────────────────────────
+_smoke_*.yaml
+*.tmp

@@ -97,6 +97,13 @@ _ZH: Dict[str, str] = {
     "ci.step3": "  3. 确认 {out_dir} 下已生成工程（含 op_host/op_kernel 等，参见 official-patterns §1.4）。",
     "ci.step4": "  4. 将生成的整个工程目录复制回本地，供 CANN_OpHelper 后续读取与填充。",
     "ci.tip": "提示：命令中的 soc 已拼为 msopgen 规范格式 '{soc}'；如与你的云端环境不符，可手动调整。",
+    # -- template maps (template/maps) --
+    "tmpl.dtype_unmapped": "type '{dtype}' 未收录到 ge::DT_* 映射表",
+    "tmpl.dtype_unmapped.hint": "本轮模板仅收录官方样例确认的写法（float16/float）；若为合法 dtype，请先在 template/maps.py 登记并补充 docs/official-patterns.md 出处",
+    "tmpl.format_unmapped": "format '{fmt}' 未收录到 ge::FORMAT_* 映射表",
+    "tmpl.format_unmapped.hint": "本轮模板仅收录官方样例确认的 ND；若为合法 format，请先在 template/maps.py 登记并注明出处",
+    "tmpl.soc_unmapped": "soc_version '{soc}' 未收录到 AddConfig 映射表",
+    "tmpl.soc_unmapped.hint": "本轮仅收录官方样例的 ascend910b1→ascend910b；请参照 docs/official-patterns §3.3 核对你的 soc 对应的 AddConfig 写法后再登记",
 }
 
 #: English message templates.
@@ -152,6 +159,13 @@ _EN: Dict[str, str] = {
     "ci.step3": "  3. Confirm the project (op_host/op_kernel etc.; see official-patterns §1.4) was created under {out_dir}.",
     "ci.step4": "  4. Copy the generated project directory back to local for CANN_OpHelper to read and fill in.",
     "ci.tip": "Tip: the soc has been formatted as '{soc}' for msopgen; adjust it manually if it does not match your cloud environment.",
+    # -- template maps (template/maps) --
+    "tmpl.dtype_unmapped": "type '{dtype}' has no ge::DT_* mapping",
+    "tmpl.dtype_unmapped.hint": "Only dtypes confirmed by the official sample are registered (float16/float) in this phase; to add one, register it in template/maps.py and record its source in docs/official-patterns.md",
+    "tmpl.format_unmapped": "format '{fmt}' has no ge::FORMAT_* mapping",
+    "tmpl.format_unmapped.hint": "Only the official sample format ND is registered in this phase; to add one, register it in template/maps.py and note its source",
+    "tmpl.soc_unmapped": "soc_version '{soc}' has no AddConfig mapping",
+    "tmpl.soc_unmapped.hint": "Only the official sample mapping ascend910b1->ascend910b is registered; check the AddConfig form for your soc in docs/official-patterns SS3.3 before registering",
 }
 
 _CATALOG: Dict[str, Dict[str, str]] = {"zh": _ZH, "en": _EN}

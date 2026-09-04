@@ -1,0 +1,16 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+{% set z = outputs[0] %}
+    __aicore__ inline void Init(GM_ADDR {{ x.name }}, GM_ADDR {{ y.name }}, GM_ADDR {{ z.name }}, uint32_t totalLength, uint32_t tileNum)
+    {
+        this->blockLength = totalLength / AscendC::GetBlockNum();
+        this->tileNum = tileNum;
+        this->tileLength = this->blockLength / tileNum / BUFFER_NUM;
+        {{ x.name }}Gm.SetGlobalBuffer((__gm__ {{ x.dtype_alias }} *){{ x.name }} + this->blockLength * AscendC::GetBlockIdx(), this->blockLength);
+        {{ y.name }}Gm.SetGlobalBuffer((__gm__ {{ y.dtype_alias }} *){{ y.name }} + this->blockLength * AscendC::GetBlockIdx(), this->blockLength);
+        {{ z.name }}Gm.SetGlobalBuffer((__gm__ {{ z.dtype_alias }} *){{ z.name }} + this->blockLength * AscendC::GetBlockIdx(), this->blockLength);
+        pipe.InitBuffer(inQueue{{ x.cap }}, BUFFER_NUM, this->tileLength * sizeof({{ x.dtype_alias }}));
+        pipe.InitBuffer(inQueue{{ y.cap }}, BUFFER_NUM, this->tileLength * sizeof({{ y.dtype_alias }}));
+        pipe.InitBuffer(outQueue{{ z.cap }}, BUFFER_NUM, this->tileLength * sizeof({{ z.dtype_alias }}));
+    }
+

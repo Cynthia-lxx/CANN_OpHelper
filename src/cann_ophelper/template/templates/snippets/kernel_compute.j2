@@ -1,0 +1,13 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+{% set z = outputs[0] %}
+    __aicore__ inline void Compute(int32_t progress)
+    {
+        AscendC::LocalTensor<{{ x.dtype_alias }}> {{ x.name }}Local = inQueue{{ x.cap }}.DeQue<{{ x.dtype_alias }}>();
+        AscendC::LocalTensor<{{ y.dtype_alias }}> {{ y.name }}Local = inQueue{{ y.cap }}.DeQue<{{ y.dtype_alias }}>();
+        AscendC::LocalTensor<{{ z.dtype_alias }}> {{ z.name }}Local = outQueue{{ z.cap }}.AllocTensor<{{ z.dtype_alias }}>();
+        AscendC::Add({{ z.name }}Local, {{ x.name }}Local, {{ y.name }}Local, this->tileLength);
+        outQueue{{ z.cap }}.EnQue<{{ z.dtype_alias }}>({{ z.name }}Local);
+        inQueue{{ x.cap }}.FreeTensor({{ x.name }}Local);
+        inQueue{{ y.cap }}.FreeTensor({{ y.name }}Local);
+    }

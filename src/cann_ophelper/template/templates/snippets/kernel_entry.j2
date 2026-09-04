@@ -1,0 +1,11 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+{% set z = outputs[0] %}
+__global__ __aicore__ void {{ op_snake }}(GM_ADDR {{ x.name }}, GM_ADDR {{ y.name }}, GM_ADDR {{ z.name }}, GM_ADDR workspace, GM_ADDR tiling)
+{
+    REGISTER_TILING_DEFAULT({{ tiling_struct }});
+    GET_TILING_DATA_WITH_STRUCT({{ tiling_struct }}, tiling_data, tiling);
+    {{ kernel_class }}<{{ x.macro_alias }}, {{ y.macro_alias }}, {{ z.macro_alias }}> op;
+    op.Init({{ x.name }}, {{ y.name }}, {{ z.name }}, tiling_data.totalLength, tiling_data.tileNum);
+    op.Process();
+}

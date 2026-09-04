@@ -1,0 +1,8 @@
+{% set z = outputs[0] %}
+    __aicore__ inline void CopyOut(int32_t progress)
+    {
+        AscendC::LocalTensor<{{ z.dtype_alias }}> {{ z.name }}Local = outQueue{{ z.cap }}.DeQue<{{ z.dtype_alias }}>();
+        AscendC::DataCopy({{ z.name }}Gm[progress * this->tileLength], {{ z.name }}Local, this->tileLength);
+        outQueue{{ z.cap }}.FreeTensor({{ z.name }}Local);
+    }
+

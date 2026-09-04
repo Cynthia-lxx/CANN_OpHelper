@@ -1,0 +1,17 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+{% set z = outputs[0] %}
+private:
+    AscendC::TPipe pipe;
+    AscendC::TQue<AscendC::TPosition::VECIN, QUEUE_DEPTH> inQueue{{ x.cap }};
+    AscendC::TQue<AscendC::TPosition::VECIN, QUEUE_DEPTH> inQueue{{ y.cap }};
+    AscendC::TQue<AscendC::TPosition::VECOUT, QUEUE_DEPTH> outQueue{{ z.cap }};
+    AscendC::GlobalTensor<{{ x.dtype_alias }}> {{ x.name }}Gm;
+    AscendC::GlobalTensor<{{ y.dtype_alias }}> {{ y.name }}Gm;
+    AscendC::GlobalTensor<{{ z.dtype_alias }}> {{ z.name }}Gm;
+    uint32_t blockLength;
+    uint32_t tileNum;
+    uint32_t tileLength;
+};
+
+

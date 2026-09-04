@@ -1,0 +1,12 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+private:
+    __aicore__ inline void CopyIn(int32_t progress)
+    {
+        AscendC::LocalTensor<{{ x.dtype_alias }}> {{ x.name }}Local = inQueue{{ x.cap }}.AllocTensor<{{ x.dtype_alias }}>();
+        AscendC::LocalTensor<{{ y.dtype_alias }}> {{ y.name }}Local = inQueue{{ y.cap }}.AllocTensor<{{ y.dtype_alias }}>();
+        AscendC::DataCopy({{ x.name }}Local, {{ x.name }}Gm[progress * this->tileLength], this->tileLength);
+        AscendC::DataCopy({{ y.name }}Local, {{ y.name }}Gm[progress * this->tileLength], this->tileLength);
+        inQueue{{ x.cap }}.EnQue({{ x.name }}Local);
+        inQueue{{ y.cap }}.EnQue({{ y.name }}Local);
+    }

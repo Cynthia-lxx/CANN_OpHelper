@@ -1,0 +1,7 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+{% set z = outputs[0] %}
+template <class {{ x.dtype_alias }}, class {{ y.dtype_alias }}, class {{ z.dtype_alias }}>
+class {{ kernel_class }} {
+public:
+    __aicore__ inline {{ kernel_class }}() {}

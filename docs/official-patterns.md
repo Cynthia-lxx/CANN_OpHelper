@@ -345,3 +345,55 @@ OP_ADD(AddCustomTemplate);
 4. Tiling 结构体文件由 Kernel/Host 共享（Host 写、Kernel 读）。`[S1][S2][S3]`
 5. dtype/format 在 JSON（字符串小写）、Host（`ge::DT_*`/`ge::FORMAT_*`）、Kernel（`DTYPE_*` 宏）三处写法不同——工具需维护**对应映射表**（后续轮）。
 6. 生成文件/类名规则：`OpType`（PascalCase）→ 文件与函数名 `op_type`（snake_case）。`[D1][S1]`
+
+---
+
+## 7. template-engine 整文件模板基准（2026-09-04 落地）
+
+阶段二地基轮：`src/cann_ophelper/template/`。本轮只做 **AddCustomTemplate 单点 + 整文件模板**；片段拼装留待 apply-pipeline 轮。
+
+### 7.1 基准文件与产物映射
+
+渲染一个 OpSpec（AddCustomTemplate 形态）得到三个整文件，逐字对照官方：
+
+| 产物（engine 输出 relpath） | 模板（包内逻辑名） | 官方对照基准 |
+| --- | --- | --- |
+| `op_kernel/<op_snake>.cpp` | `templates/op_kernel/kernel.cpp.j2` | [S1] `op_kernel/add_custom_template.cpp` |
+| `op_kernel/<op_snake>_tiling.h` | `templates/op_kernel/tiling.h.j2` | [S2] `op_kernel/add_custom_template_tiling.h` |
+| `op_host/<op_snake>.cpp` | `templates/op_host/host.cpp.j2` | [S3] `op_host/add_custom_template.cpp` |
+
+### 7.2 命名 / AddConfig 暂定规则（有证据但非全仓通用，勿虚构推导）
+
+已检索官方样例全部 13 处 Kernel 类、62 处 TilingData 结构体、20 处 AddConfig，**命名跨章节不一致**：
+
+- 03 章 msopgen 模板工程路线：类名 `KernelAdd` = `Kernel` + OpType 去尾部 `CustomTemplate`/`Custom` 核心名；tiling 结构体为常量 `TilingDataTemplate`（与算子名无关）。
+- 开源仓路线（示例见 devkit/昇腾社区）：`<Op>TilingData` 等不同，两套路线并存。
+
+故本轮只落地与 03 章 AddCustomTemplate 一致的显式/单点规则（源码注释已标注暂定）：
+
+- `naming.kernel_class`：`KERNEL_SUFFIXES = ("CustomTemplate", "Custom")` 去尾缀后加 `Kernel` 前缀。
+- `naming.tiling_struct`：常量 `TilingDataTemplate`（仅对 msopgen 模板工程路线成立）。
+- `maps.opdef_soc`：显式映射表 `{"ascend910b1": "ascend910b"}`；未收录 soc 抛错，**不做「去版本尾号」式通用推导**。
+- `maps.ge_dtype/ge_format`：小表仅收录官方样例确认项（`float16`/`float` → `ge::DT_FLOAT16`/`ge::DT_FLOAT`；`ND` → `ge::FORMAT_ND`）；未知输入抛 `OpSpecError`（i18n hint 指引先登记 maps 并记录出处）。
+
+### 7.3 渲染 vs 官方 S1–S3 的逐字差异清单（有记录修正，勿当作 bug）
+
+产物与官方原文仅差下列归一化修正（`tests/test_template_engine.py::normalize_official` 同款）：
+
+1. 官方 host 拼写笔误 `intputShape` → `inputShape`。
+2. 官方 kernel `__global__` 行首多余空格清除。
+3. 官方 kernel `printf(",  AscendC::GetBlockIdx(), ...)` 逗号后双空格清为单空格。
+4. 统一 EOF 换行：官方 `tiling.h` 文件末尾无换行，规范化为有（其余两文件官方本就有）。
+
+另：渲染 `.DataType({ ... })` / `.Format({ ... })` 花括号收紧为无内空格（`{{- -}}`），与官方逐字一致。
+
+### 7.4 引擎行为与后续改造约定
+
+- Jinja2 Environment：`keep_trailing_newline=True`、`trim_blocks=True`（仅去掉 `{% %}` 块标签后随行换行，避免 `{% set %}` 在产物顶部留空行）、`lstrip_blocks=False`（不动缩进）。
+- Add 形态假设：两输入 x/y → 一输出 z；模板正文逐字官方四段式，张量 token 经 `{% set x = inputs[0] %}` 绑定。
+- 逐字对齐回归双保险：golden 快照（主回归手段，自包含不依赖大目录）+ 官方 S1–S3 实样对齐（次，只读 3 个精确文件，运行期不扫目录）。
+- **后续 apply-pipeline 轮拆片段时，只改 `templates/` 与 `engine.py`，不动 `context.py`/`maps.py`/`model.py`**（render context 是模板变量契约唯一来源）。
+
+### 7.5 已实现自检
+
+命名/映射/上下文/引擎测试与全量回归 94/94 通过；golden 快照 3 件套入库。

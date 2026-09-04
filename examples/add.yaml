@@ -1,0 +1,34 @@
+# CANN_OpHelper 算子描述示例：Add（逐元素加），对应官方 msopgen 示例 AddCustomTemplate。
+#
+# 字段语义对齐 docs/official-patterns.md §1.3/§1.4：
+# - type 与 format 为并行数组，下标相同者为一组 "dtype+format" 组合（官方 JSON 惯例）。
+#   例如 type: [float16, float] 表示该张量支持 float16 与 float32 两种 dtype。
+# - soc_version 为基础 SoC 版本；生成命令时 msopgen 会拼为 ai_core-ascend910b1。
+# - shape 为可选算子形状提示（支持 -1 动态），仅作元信息，不进入 msopgen 命令。
+
+op_type: AddCustomTemplate        # PascalCase 算子类型名（决定生成文件/函数名）
+soc_version: ascend910b1          # msopgen -c 将自动拼为 ai_core-ascend910b1
+language: cpp                     # 官方 msopgen -lan 取值，固定 cpp
+description: 逐元素加法 z = x + y（Element-Wise，官方 Add 模板样例）
+
+inputs:
+  - name: x
+    param_type: required
+    type: [float16, float]
+    format: [ND, ND]
+    shape: [8, 2048]              # 仅示例形状提示
+  - name: y
+    param_type: required
+    type: [float16, float]
+    format: [ND, ND]
+    shape: [8, 2048]
+
+outputs:
+  - name: z
+    param_type: required
+    type: [float16, float]
+    format: [ND, ND]
+    shape: [8, 2048]
+
+# attrs: []                       # 有标量属性时在此声明（name/type/value）
+# tiling: {}                      # Tiling 预留字段（后续轮启用核间/核内均分策略）

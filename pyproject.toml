@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cann-ophelper"
+version = "0.1.0"
+description = "Windows 本地运行的 CANN Ascend C 算子工程模板生成助手（不编译/不运行 C++）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "CANN_OpHelper" }]
+keywords = ["cann", "ascend", "ascend-c", "operator", "template"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Software Development :: Code Generators",
+]
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+    "jinja2>=3.1.4",
+    "PyYAML>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[project.scripts]
+cann-ophelper = "cann_ophelper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -350,7 +350,7 @@ OP_ADD(AddCustomTemplate);
 
 ## 7. template-engine 整文件模板基准（2026-09-04 落地）
 
-阶段二地基轮：`src/cann_ophelper/template/`。本轮只做 **AddCustomTemplate 单点 + 整文件模板**；片段拼装留待 apply-pipeline 轮。
+阶段二地基轮：`src/cann_ophelper/template/`。本轮只做 **AddCustomTemplate 单点 + 整文件模板**；片段拼装留待 apply-pipeline 轮（2026-09-05 已实现，**本节所列三个整文件模板均已删除并被 §8 取代**，仅保留作历史记录）。
 
 ### 7.1 基准文件与产物映射
 
@@ -392,8 +392,63 @@ OP_ADD(AddCustomTemplate);
 - Jinja2 Environment：`keep_trailing_newline=True`、`trim_blocks=True`（仅去掉 `{% %}` 块标签后随行换行，避免 `{% set %}` 在产物顶部留空行）、`lstrip_blocks=False`（不动缩进）。
 - Add 形态假设：两输入 x/y → 一输出 z；模板正文逐字官方四段式，张量 token 经 `{% set x = inputs[0] %}` 绑定。
 - 逐字对齐回归双保险：golden 快照（主回归手段，自包含不依赖大目录）+ 官方 S1–S3 实样对齐（次，只读 3 个精确文件，运行期不扫目录）。
-- **后续 apply-pipeline 轮拆片段时，只改 `templates/` 与 `engine.py`，不动 `context.py`/`maps.py`/`model.py`**（render context 是模板变量契约唯一来源）。
+- **后续 apply-pipeline 轮拆片段时，只改 `templates/` 与 `engine.py`，不动 `context.py`/`maps.py`/`model.py`**（render context 是模板变量契约唯一来源）。*（该约定已按 §8.1 修订——片段目录改限 `templates/snippets/`，装配声明移至新增的 `template/assembly.py`。）*
 
 ### 7.5 已实现自检
 
 命名/映射/上下文/引擎测试与全量回归 94/94 通过；golden 快照 3 件套入库。
+
+## 8. apply-pipeline 片段基准（2026-09-05 落地）
+
+第二轮改造：将 §7 的三个**整文件** Jinja2 模板（`kernel.cpp.j2` / `tiling.h.j2` / `host.cpp.j2`）删除，改为「**行级片段（snippet）+ Python 侧 concat 装配**」体系，为后续「读取已生成工程 → 按片段 id 定位填空 Compute/Tiling」打地基。
+
+### 8.1 架构与边界修订
+
+- **目录结构**：片段文件一律放 `template/templates/snippets/`；装配声明在 `template/assembly.py`；渲染在 `template/engine.py`。仍**不动 `context.py` / `maps.py` / `model.py`**（render context 仍是模板变量契约唯一来源）——这是对 §7.4 旧约定「只改 templates/ 与 engine.py」的修订。
+- **`assembly.py` = 唯一事实来源**（纯声明、无渲染逻辑）：
+  - `SNIPPETS`：片段 id → 模板逻辑路径（相对 `template/templates`）。
+  - `FILE_ASSEMBLIES`：每个产物一条 `(逻辑名, relpath 模式, 有序片段 id 序列)`。
+  - `TEMPLATE_OUTPUTS`：由 `FILE_ASSEMBLIES` **派生**的兼容导出（`(逻辑名, relpath 模式)`），保持既有「3 条、唯一、指向 op_*/」测试契约不变。
+  - `assembly_ids_for(relpath_pattern)` / `validate_assemblies()`：查询与完整性校验（重复模式/空装配/重复片段/死注册均抛错）。
+- **engine.py**：改为装配驱动。公共 API：`render(spec)`（契约不变：返回 relpath→文本，不写盘、无副作用）、`render_snippet(snippet_id, spec)`（未知 id 抛 `KeyError`）、`render_file(spec, relpath_pattern)`（未知模式抛 `KeyError`）。
+- **`template/__init__.py`** 新增导出：`SNIPPETS` / `FILE_ASSEMBLIES` / `render_snippet` / `render_file`。
+- Jinja2 Environment 设置与 §7.4 相同：`keep_trailing_newline=True`、`trim_blocks=True`、`lstrip_blocks=False`。
+
+### 8.2 片段切分表
+
+三个产物全部由片段拼装；`license` 为三个产物共享（官方版权块三文件逐字相同，其后空行数一致）。片段即旧整文件内容行的**逐行切片**，不含整文件顶部的 Jinja 前导注释；需要 x/y/z 张量绑定的片段自带 `{% set %}` 头（渲染时不产出文本）。
+
+| 产物（relpath 模式） | 片段装配顺序 | 各片段内容 |
+| --- | --- | --- |
+| `op_kernel/{op_snake}.cpp` | license, kernel_includes, kernel_class_head, kernel_init, kernel_process, kernel_copyin, kernel_compute, kernel_copyout, kernel_members, kernel_entry | `kernel_includes` include+常量；`kernel_class_head` 模板类头+ctor；`kernel_init` Init；`kernel_process` Process；`kernel_copyin` CopyIn；`kernel_compute` Compute；`kernel_copyout` CopyOut；`kernel_members` 私有成员+类收尾；`kernel_entry` `__global__` 入口 |
+| `op_kernel/{op_snake}_tiling.h` | license, tiling_body | `tiling_body` guard+include+struct+endif |
+| `op_host/{op_snake}.cpp` | license, host_includes, host_tiling, host_infer, host_opdef | `host_includes` 两个 include；`host_tiling` `namespace optiling` TilingFunc；`host_infer` `namespace ge` InferShape/InferDataType；`host_opdef` `namespace ops` OpDef 注册链 |
+
+行归属约定（迁移时以官方行序列实测为准，勿凭外观臆断）：**片段之间的空行归「前一片段」作尾部空行**（如 `license` 固定带版权块后两个空行）；片段渲染后直接 concat 即逐字还原整文件。实测拆分依据（拆分前整文件模板行号，1 起）：
+- `tiling.h.j2`：license 行 3–13（版权行 3–11 + 空行 12–13）→ `tiling_body` 行 14–22。
+- `host.cpp.j2`：license 行 12–22 → `host_includes` 行 23–25 → `host_tiling` 行 26–38 → `host_infer` 行 39–54 → `host_opdef` 行 55–80（行 9–11 为 `{% set %}`，行 1–8 为前导注释，不产出文本）。
+- kernel 片段组按同规则由 M2 一次性脚本从旧 `kernel.cpp.j2`（行 11–104 内容区）切出（脚本已删）。
+
+### 8.3 拼接不变量（测试锁死）
+
+对任一产物 relpath：
+
+```
+concat(render_snippet(s) for s in FILE_ASSEMBLIES[relpath 的片段序列]) == render(spec)[relpath] == golden == 官方 S1–S3 归一化文本
+```
+
+- `tests/test_template_snippets.py` 锁注册表完备性（恰好 3 产物、片段均注册、无重复/无死注册、`license` 居首共享）、拼接不变量、片段独立可渲染（非空、以换行结尾）、错误路径（未知片段 id / 未知 relpath → `KeyError`）。
+- 新增/修改片段的纪律：片段内逐字保留官方文本与插值；空行随归属；**模板文件一律 LF、无 CR**（Jinja2 渲染对源换行自动归一化，产物不受源 CRLF/LF 影响）；改片段后必须跑全量回归（golden + 官方对齐 + 拼接不变量三保险）。
+
+### 8.4 代码结构（落地状态）
+
+```
+src/cann_ophelper/template/
+├── assembly.py            # 唯一事实来源：SNIPPETS + FILE_ASSEMBLIES (+派生 TEMPLATE_OUTPUTS) + 校验
+├── engine.py              # 装配驱动：render / render_snippet / render_file
+├── __init__.py            # 导出 SNIPPETS / FILE_ASSEMBLIES / TEMPLATE_OUTPUTS / render_snippet / render_file
+├── context.py / maps.py / naming.py / model.py   # 不动（变量契约唯一来源）
+└── templates/snippets/    # 片段库：license + kernel_*(10) + tiling_body + host_*(4) = 15 个 .j2
+```
+
+

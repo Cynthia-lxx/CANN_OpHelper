@@ -14,7 +14,15 @@ public surface so callers can ``from cann_ophelper.template import ...``.
 from __future__ import annotations
 
 from .context import build_render_context
-from .engine import TEMPLATE_OUTPUTS, TemplateEngine, render
+from .engine import (
+    FILE_ASSEMBLIES,
+    SNIPPETS,
+    TEMPLATE_OUTPUTS,
+    TemplateEngine,
+    render,
+    render_file,
+    render_snippet,
+)
 from .maps import ge_dtype, ge_format, opdef_soc
 from .naming import (
     dtype_alias,
@@ -26,6 +34,8 @@ from .naming import (
 )
 
 __all__ = [
+    "FILE_ASSEMBLIES",
+    "SNIPPETS",
     "TEMPLATE_OUTPUTS",
     "TemplateEngine",
     "build_render_context",
@@ -37,6 +47,8 @@ __all__ = [
     "op_snake",
     "opdef_soc",
     "render",
+    "render_file",
+    "render_snippet",
     "tiling_guard",
     "tiling_struct",
 ]

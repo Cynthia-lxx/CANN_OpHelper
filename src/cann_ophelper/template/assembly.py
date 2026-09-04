@@ -19,11 +19,10 @@ snippet template is a line-exact slice of the original whole-file template,
 ``concat(render(snippet) for id in ids)`` reproduces the whole-file render
 byte for byte (locked by the golden / official-alignment tests).
 
-Round 2 transition state: the kernel produced file is already assembled from
-line-exact snippets (shared ``license`` + ``kernel_*``) under
-``templates/snippets/``; tiling and host still point at their whole-file
-templates (``file_tiling`` / ``file_host``) until they are split in the same
-round.
+Round 2 final state: every produced file is assembled from line-exact snippets
+under ``templates/snippets/``. ``license`` is shared by all three files; the
+old whole-file templates (``op_kernel/kernel.cpp.j2``,
+``op_kernel/tiling.h.j2``, ``op_host/host.cpp.j2``) have been removed.
 """
 
 from __future__ import annotations
@@ -39,15 +38,15 @@ __all__ = [
 ]
 
 #: Snippet id -> Jinja2 template path, relative to ``template/templates``.
-#: ``license`` is shared by every produced file; kernel snippets are the
-#: line-exact split of the old whole-file ``op_kernel/kernel.cpp.j2`` (rows
-#: 11-104; the first ten template rows were Jinja prelude). tiling/host still
-#: use whole-file placeholders until the round-2 host/tiling migration.
+#: ``license`` is shared by every produced file. Snippets are the line-exact
+#: split of the old whole-file templates (rows after each file's Jinja prelude
+#: comment/set lines); blank lines between sections are owned by the preceding
+#: snippet as trailing blanks.
 SNIPPETS: Dict[str, str] = {
-    # shared license block + two trailing blank lines (rows 11-21 of the old
-    # kernel template; identical text and blank count in the tiling/host heads)
+    # shared license block + two trailing blank lines (identical text and blank
+    # count in every official head)
     "license": "snippets/license.j2",
-    # --- kernel (old kernel.cpp.j2 rows) ---
+    # --- kernel (old op_kernel/kernel.cpp.j2) ---
     "kernel_includes": "snippets/kernel_includes.j2",
     "kernel_class_head": "snippets/kernel_class_head.j2",
     "kernel_init": "snippets/kernel_init.j2",
@@ -57,9 +56,13 @@ SNIPPETS: Dict[str, str] = {
     "kernel_copyout": "snippets/kernel_copyout.j2",
     "kernel_members": "snippets/kernel_members.j2",
     "kernel_entry": "snippets/kernel_entry.j2",
-    # --- whole-file placeholders (removed when tiling/host are split) ---
-    "file_tiling": "op_kernel/tiling.h.j2",
-    "file_host": "op_host/host.cpp.j2",
+    # --- tiling header (old op_kernel/tiling.h.j2) ---
+    "tiling_body": "snippets/tiling_body.j2",
+    # --- host (old op_host/host.cpp.j2) ---
+    "host_includes": "snippets/host_includes.j2",
+    "host_tiling": "snippets/host_tiling.j2",
+    "host_infer": "snippets/host_infer.j2",
+    "host_opdef": "snippets/host_opdef.j2",
 }
 
 #: Produced file assemblies: (logical name, output relpath pattern, ordered
@@ -85,12 +88,21 @@ FILE_ASSEMBLIES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     (
         "op_kernel_tiling_h",
         "op_kernel/{op_snake}_tiling.h",
-        ("file_tiling",),
+        (
+            "license",
+            "tiling_body",
+        ),
     ),
     (
         "op_host_cpp",
         "op_host/{op_snake}.cpp",
-        ("file_host",),
+        (
+            "license",
+            "host_includes",
+            "host_tiling",
+            "host_infer",
+            "host_opdef",
+        ),
     ),
 )
 

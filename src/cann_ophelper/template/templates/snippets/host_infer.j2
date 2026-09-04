@@ -1,0 +1,16 @@
+namespace ge {
+static graphStatus InferShape(gert::InferShapeContext *context)
+{
+    const gert::Shape *inputShape = context->GetInputShape(0);
+    gert::Shape *outputShape = context->GetOutputShape(0);
+    *outputShape = *inputShape;
+    return GRAPH_SUCCESS;
+}
+
+static graphStatus InferDataType(gert::InferDataTypeContext *context)
+{
+    context->SetOutputDataType(0, context->GetInputDataType(0));
+    return ge::GRAPH_SUCCESS;
+}
+}  // namespace ge
+

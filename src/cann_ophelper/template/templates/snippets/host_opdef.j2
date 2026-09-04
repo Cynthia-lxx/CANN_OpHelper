@@ -1,0 +1,29 @@
+{% set x = inputs[0] %}
+{% set y = inputs[1] %}
+{% set z = outputs[0] %}
+namespace ops {
+class {{ op_type }} : public OpDef {
+public:
+    explicit {{ op_type }}(const char *name) : OpDef(name)
+    {
+        this->Input("{{ x.name }}")
+            .ParamType({{ x.param_enum }})
+            .DataType({ {{- x.ge_types -}} })
+            .Format({ {{- x.ge_formats -}} });
+        this->Input("{{ y.name }}")
+            .ParamType({{ y.param_enum }})
+            .DataType({ {{- y.ge_types -}} })
+            .Format({ {{- y.ge_formats -}} });
+        this->Output("{{ z.name }}")
+            .ParamType({{ z.param_enum }})
+            .DataType({ {{- z.ge_types -}} })
+            .Format({ {{- z.ge_formats -}} });
+
+        this->SetInferShape(ge::InferShape).SetInferDataType(ge::InferDataType);
+        this->AICore()
+            .SetTiling(optiling::TilingFunc)
+            .AddConfig("{{ soc_config }}");
+    }
+};
+OP_ADD({{ op_type }});
+}  // namespace ops

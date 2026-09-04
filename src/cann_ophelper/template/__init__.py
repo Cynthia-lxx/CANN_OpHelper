@@ -13,6 +13,7 @@ public surface so callers can ``from cann_ophelper.template import ...``.
 
 from __future__ import annotations
 
+from .context import build_render_context
 from .maps import ge_dtype, ge_format, opdef_soc
 from .naming import (
     dtype_alias,
@@ -24,6 +25,7 @@ from .naming import (
 )
 
 __all__ = [
+    "build_render_context",
     "dtype_alias",
     "ge_dtype",
     "ge_format",

@@ -1,13 +1,17 @@
-"""cann_ophelper.yamlio —— OpSpec 与 YAML 之间的持久化。
+"""cann_ophelper.yamlio -- Persistence between OpSpec and YAML.
 
-职责：
-- ``load_op_spec(path)``：读取 YAML → 校验 → 返回 ``OpSpec``；
-- ``dump_op_spec(spec, path)``：``OpSpec`` → 校验 → 块式 YAML 落盘（UTF-8、字段序稳定）。
+Responsibilities:
+- ``load_op_spec(path)``: read YAML -> validate -> return ``OpSpec``;
+- ``dump_op_spec(spec, path)``: ``OpSpec`` -> validate -> block-style YAML to disk
+  (UTF-8, stable field order).
 
-错误处理：缺失文件、YAML 语法错、结构/字段非法，均抛带上下文与修正建议的
-``OpSpecError``（``ValueError`` 子类），为后续 typer/rich 渲染预留结构化字段。
+Error handling: missing files, YAML syntax errors and structural/field problems
+all raise ``OpSpecError`` (a ``ValueError`` subclass) carrying context and a fix
+hint, ready for typer/rich rendering later.
 
-依赖：PyYAML（声明于 pyproject；仅在真实环境/测试中执行，不阻塞纯语法检查）。
+Dependencies: PyYAML (declared in pyproject; only executed in a real environment).
+
+All user-facing messages are resolved through ``cann_ophelper.i18n``.
 """
 
 from __future__ import annotations
@@ -17,35 +21,38 @@ from typing import Any, Dict, Union
 
 import yaml
 
+from .i18n import t
 from .model import OpSpec, OpSpecError
 
 __all__ = ["load_op_spec", "dump_op_spec", "op_spec_to_yaml_text", "yaml_text_to_op_spec"]
 
-#: YAML 允许非顶层非字符串键；为友好报错将文档根部限制为映射。
+#: YAML allows non-string keys off the root; restrict the root to a mapping for
+#: friendlier errors.
 _FILE_ENCODING = "utf-8"
 
 
 def yaml_text_to_op_spec(text: str) -> OpSpec:
-    """把 YAML 文本解析为 OpSpec。语法或语义错误均转成 OpSpecError。"""
+    """Parse YAML text into an OpSpec. Syntax and semantic errors become OpSpecError."""
     try:
         raw: Any = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise OpSpecError(f"YAML 语法错误：{exc}", hint="请检查引号、缩进与冒号；示例见 examples/add.yaml") from exc
+        raise OpSpecError(t("yamlio.syntax", err=exc), hint=t("yamlio.syntax.hint")) from exc
     if raw is None:
-        raise OpSpecError("YAML 内容为空", hint="至少需提供 op_type；示例见 examples/add.yaml")
+        raise OpSpecError(t("yamlio.empty"), hint=t("yamlio.empty.hint"))
     try:
         return OpSpec.from_dict(raw)
     except OpSpecError:
         raise
-    except Exception as exc:  # noqa: BLE001 —— 防御性兜底，统一错误面
-        raise OpSpecError(f"无法解析算子描述：{exc}", hint="请对照 examples/add.yaml 检查字段类型") from exc
+    except Exception as exc:  # noqa: BLE001 -- defensive fallback, unified error surface
+        raise OpSpecError(t("yamlio.parse", err=exc), hint=t("yamlio.parse.hint")) from exc
 
 
 def op_spec_to_yaml_text(spec: OpSpec, *, sort_keys: bool = False) -> str:
-    """把 OpSpec 序列化为块式 YAML 文本。
+    """Serialize an OpSpec to block-style YAML text.
 
-    - 校验优先：非法模型不落盘；
-    - ``sort_keys=False``：保持模型 to_dict 的稳定字段序，便于 diff 与人工阅读。
+    - Validation first: an invalid model is never written;
+    - ``sort_keys=False`` keeps the stable field order from to_dict for easy
+      diffs and human reading.
     """
     spec.validate()
     return yaml.safe_dump(
@@ -58,27 +65,36 @@ def op_spec_to_yaml_text(spec: OpSpec, *, sort_keys: bool = False) -> str:
 
 
 def load_op_spec(path: Union[str, Path]) -> OpSpec:
-    """从文件加载并校验算子描述 YAML。"""
+    """Load and validate an operator spec YAML from file."""
     p = Path(path)
     if not p.exists():
-        raise OpSpecError(f"文件不存在：{p}", hint="请检查路径，或在 YAML 所在目录执行命令")
+        raise OpSpecError(t("yamlio.file_missing", path=p), hint=t("yamlio.file_missing.hint"))
     if not p.is_file():
-        raise OpSpecError(f"路径不是文件：{p}", hint="请提供一个 YAML 文件路径")
+        raise OpSpecError(t("yamlio.not_file", path=p), hint=t("yamlio.not_file.hint"))
     try:
         text = p.read_text(encoding=_FILE_ENCODING)
     except OSError as exc:
-        raise OpSpecError(f"读取文件失败：{p}（{exc.strerror or exc}）", hint="请检查文件是否可读") from exc
+        reason = exc.strerror or str(exc)
+        raise OpSpecError(
+            t("yamlio.read_fail", path=p, reason=reason),
+            hint=t("yamlio.read_fail.hint"),
+        ) from exc
     spec = yaml_text_to_op_spec(text)
     spec.source = str(p)  # type: ignore[attr-defined]
     return spec
 
+
 def dump_op_spec(spec: OpSpec, path: Union[str, Path]) -> Path:
-    """将 OpSpec 校验后以块式 YAML 写入文件；父目录不存在时自动创建。"""
+    """Validate then write an OpSpec as block-style YAML; create parents if needed."""
     p = Path(path)
     text = op_spec_to_yaml_text(spec)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding=_FILE_ENCODING)
     except OSError as exc:
-        raise OpSpecError(f"写入文件失败：{p}（{exc.strerror or exc}）", hint="请检查目标目录权限") from exc
+        reason = exc.strerror or str(exc)
+        raise OpSpecError(
+            t("yamlio.write_fail", path=p, reason=reason),
+            hint=t("yamlio.write_fail.hint"),
+        ) from exc
     return p

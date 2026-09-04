@@ -1,14 +1,18 @@
-# CANN_OpHelper 算子描述示例：Add（逐元素加），对应官方 msopgen 示例 AddCustomTemplate。
+# CANN_OpHelper operator spec example: Add (element-wise add), matching the
+# official msopgen example AddCustomTemplate.
 #
-# 字段语义对齐 docs/official-patterns.md §1.3/§1.4：
-# - type 与 format 为并行数组，下标相同者为一组 "dtype+format" 组合（官方 JSON 惯例）。
-#   例如 type: [float16, float] 表示该张量支持 float16 与 float32 两种 dtype。
-# - soc_version 为基础 SoC 版本；生成命令时 msopgen 会拼为 ai_core-ascend910b1。
-# - shape 为可选算子形状提示（支持 -1 动态），仅作元信息，不进入 msopgen 命令。
+# Field semantics align with docs/official-patterns.md SS1.3/SS1.4:
+# - type and format are parallel arrays; entries at the same index form one
+#   "dtype+format" combination (official JSON convention). E.g.
+#   type: [float16, float] means the tensor supports both float16 and float32.
+# - soc_version is the base SoC version; msopgen will prefix it as
+#   ai_core-ascend910b1 when assembling the command.
+# - shape is an optional operator shape hint (-1 allowed for dynamic dims);
+#   metadata only, never part of the msopgen command.
 
-op_type: AddCustomTemplate        # PascalCase 算子类型名（决定生成文件/函数名）
-soc_version: ascend910b1          # msopgen -c 将自动拼为 ai_core-ascend910b1
-language: cpp                     # 官方 msopgen -lan 取值，固定 cpp
+op_type: AddCustomTemplate        # PascalCase op type name (drives file/function names)
+soc_version: ascend910b1          # msopgen -c will become ai_core-ascend910b1
+language: cpp                     # official msopgen -lan value, always cpp
 description: 逐元素加法 z = x + y（Element-Wise，官方 Add 模板样例）
 
 inputs:
@@ -16,7 +20,7 @@ inputs:
     param_type: required
     type: [float16, float]
     format: [ND, ND]
-    shape: [8, 2048]              # 仅示例形状提示
+    shape: [8, 2048]              # example shape hint only
   - name: y
     param_type: required
     type: [float16, float]
@@ -30,5 +34,5 @@ outputs:
     format: [ND, ND]
     shape: [8, 2048]
 
-# attrs: []                       # 有标量属性时在此声明（name/type/value）
-# tiling: {}                      # Tiling 预留字段（后续轮启用核间/核内均分策略）
+# attrs: []                       # declare scalar attrs here (name/type/value)
+# tiling: {}                      # reserved for tiling (used by later phases)

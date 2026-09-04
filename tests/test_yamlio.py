@@ -1,4 +1,10 @@
-"""yamlio：YAML ↔ OpSpec 往返、非法输入错误信息的最小测试集。"""
+"""Minimal tests for YAML <-> OpSpec round-trips and invalid-input messages.
+
+Assertion fragments in this file match the Simplified Chinese templates of the
+i18n catalog (the default language; see tests/conftest.py).
+"""
+
+from __future__ import annotations
 
 import pytest
 
@@ -39,7 +45,8 @@ class TestLoad:
 
     def test_syntax_error_reports_clear_message(self):
         with pytest.raises(OpSpecError, match="YAML 语法错误"):
-            yaml_text_to_op_spec("inputs:\n  - name: 'x\n    type: ['bad'\n")  # 引号不配对
+            # unmatched quote on purpose
+            yaml_text_to_op_spec("inputs:\n  - name: 'x\n    type: ['bad'\n")
 
     def test_empty_yaml_rejected(self):
         with pytest.raises(OpSpecError, match="YAML 内容为空"):
@@ -67,7 +74,7 @@ class TestLoad:
         f1 = tmp_path / "add.yaml"
         f2 = tmp_path / "roundtrip.yaml"
         f1.write_text(ADD_YAML, encoding="utf-8")
-        load_op_spec(f1)  # 合法加载不抛错
+        load_op_spec(f1)  # valid load does not raise
         spec = load_op_spec(f1)
         dump_op_spec(spec, f2)
         assert load_op_spec(f2) == spec
@@ -82,16 +89,16 @@ class TestDump:
             outputs=[TensorSpec(name="y", type="float16")],
         )
         text = op_spec_to_yaml_text(spec)
-        # 默认 language=cpp 不写、空 attrs/tiling 不写、无 description 不写
+        # default language=cpp, empty attrs/tiling and no description are omitted
         assert "language:" not in text
         assert "attrs:" not in text
         assert "tiling:" not in text
         assert "description:" not in text
-        # 单元素 type/format 以块式数组输出
+        # a singleton type/format is emitted as a block-style array
         assert "- float16" in text
         assert "- ND" in text
 
     def test_dump_utf8_unicode_preserved(self):
-        spec = yaml_text_to_op_spec(ADD_YAML)  # description 含中文
+        spec = yaml_text_to_op_spec(ADD_YAML)  # description holds CJK text
         text = op_spec_to_yaml_text(spec)
         assert "逐元素加法" in text

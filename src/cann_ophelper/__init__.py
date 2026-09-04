@@ -1,10 +1,28 @@
-"""cann_ophelper —— Windows 本地运行的 CANN Ascend C 算子工程模板生成助手。
+"""cann_ophelper -- A Windows-local CLI toolkit that assists in generating CANN
+Ascend C operator project templates.
 
-本项目不编译、不运行任何 C++ 代码；编译验证均在云端 CANN Lab 完成。
+This project never compiles or runs C++ locally; compilation validation happens
+in the cloud CANN Lab.
+
+Language policy: code comments/docstrings are written in English; user-facing
+messages are resolved through the bilingual catalog in ``cann_ophelper.i18n``
+(Simplified Chinese by default, switchable to English).
 """
 
 __version__ = "0.1.0"
 
+from .i18n import SUPPORTED_LANGUAGES, get_language, set_language, t
 from .model import AttrSpec, OpSpec, OpSpecError, ParamType, TensorSpec
 
-__all__ = ["__version__", "OpSpec", "TensorSpec", "AttrSpec", "ParamType", "OpSpecError"]
+__all__ = [
+    "__version__",
+    "OpSpec",
+    "TensorSpec",
+    "AttrSpec",
+    "ParamType",
+    "OpSpecError",
+    "SUPPORTED_LANGUAGES",
+    "set_language",
+    "get_language",
+    "t",
+]

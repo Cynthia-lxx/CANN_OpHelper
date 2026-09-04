@@ -1,15 +1,24 @@
-"""cann_ophelper.model —— 算子元信息数据模型与校验。
+"""cann_ophelper.model -- Operator metadata data model and validation.
 
-字段语义对齐官方 msopgen 算子原型 JSON（见 docs/official-patterns.md §1.3/§1.4）：
+Field semantics follow the official msopgen operator prototype JSON (see
+docs/official-patterns.md SS1.3/SS1.4):
 
-- msopgen 原型的 input_desc/output_desc 条目含 ``name``、``param_type``（required/optional）、
-  ``format``（数组）、``type``（数组）；``format`` 与 ``type`` 为**并行数组**，
-  下标相同者构成一组受支持的“format + dtype”组合（如 ["ND","ND"] + ["float16","float"]）。
-- 原型的 JSON 中**不含 shape 与 soc**：shape 是运行期量，soc 是 msopgen ``-c`` 命令行参数，
-  因此它们由本模块的 ``OpSpec`` 承担（``soc_version``），``shape`` 仅在 ``TensorSpec.shape`` 上
-  作为可选的算子形状提示，不参与 msopgen 命令生成。
+- Each input_desc/output_desc entry carries ``name``, ``param_type``
+  (required/optional), ``format`` (array) and ``type`` (array); ``format`` and
+  ``type`` are *parallel arrays*, so the entries with the same index form one
+  supported "format + dtype" combination (e.g. ["ND","ND"] and
+  ["float16","float"]).
+- The prototype JSON does **not** contain ``shape`` or ``soc``: shape is a
+  runtime quantity and soc is an msopgen ``-c`` command line argument. They are
+  therefore represented by this module's ``OpSpec`` (``soc_version``), while
+  ``shape`` lives on ``TensorSpec.shape`` as an optional operator shape hint
+  that never enters the msopgen command.
 
-本模块只依赖标准库，供 yamlio / msopgen / 后续模板引擎共用。
+This module depends only on the standard library and is shared by yamlio /
+msopgen / later template engines.
+
+All user-facing messages are resolved through the bilingual catalog in
+``cann_ophelper.i18n``.
 """
 
 from __future__ import annotations
@@ -18,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, List, Mapping, Optional
+
+from .i18n import t
 
 __all__ = [
     "OpSpecError",
@@ -34,7 +45,11 @@ __all__ = [
 
 
 class OpSpecError(ValueError):
-    """算子描述非法：消息含字段上下文（原因）与修正建议（提示）。"""
+    """Raised when an operator spec is invalid.
+
+    The message carries a field context (reason) and a fix hint. Both pieces
+    are resolved through the i18n catalog at the call site.
+    """
 
     def __init__(self, message: str, *, field_path: str = "", hint: str = "") -> None:
         self.field_path = field_path
@@ -43,23 +58,23 @@ class OpSpecError(ValueError):
         if field_path:
             full = f"{field_path}: {message}"
         if hint:
-            full = f"{full} 建议：{hint}"
+            full = f"{full}{t('msg.hint_join')}{hint}"
         super().__init__(full)
 
 
 # ---------------------------------------------------------------------------
-# 常量与规范化
+# Constants and normalization
 # ---------------------------------------------------------------------------
 
 class ParamType(str, Enum):
-    """参数是否必选，对应官方原型 JSON 的 ``param_type`` 取值。"""
+    """Whether a parameter is required; matches the official ``param_type`` value."""
 
     REQUIRED = "required"
     OPTIONAL = "optional"
 
 
-#: 常见 dtype（小写）。以官方样例实测到的 float/float16 为准，并补充常用数值类型。
-#: 取自 msopgen 算子原型 JSON 的 ``type`` 字段惯例（ge::DT_* 的字符串别名）。
+#: Common dtypes (lowercase). Based on official samples using float/float16,
+#: plus common numeric types. These are string aliases of ge::DT_*.
 SUPPORTED_DTYPES = frozenset(
     {
         "bool",
@@ -72,7 +87,7 @@ SUPPORTED_DTYPES = frozenset(
         "uint32",
         "uint64",
         "float16",
-        "float",  # 官方 JSON 以 "float" 表示 FP32（对应 ge::DT_FLOAT）
+        "float",  # "float" means FP32 in the official JSON (ge::DT_FLOAT)
         "double",
         "bfloat16",
         "complex64",
@@ -81,7 +96,7 @@ SUPPORTED_DTYPES = frozenset(
     }
 )
 
-#: 常见 format（大写），对应官方 ``format`` 数组取值（ge::FORMAT_* 的字符串别名）。
+#: Common formats (uppercase); string aliases of ge::FORMAT_*.
 SUPPORTED_FORMATS = frozenset(
     {"ND", "NCHW", "NHWC", "NC1HWC0", "NDC1HWC0", "NZ", "FRACTAL_Z", "FRACTAL_NZ", "FRACTAL_ZN_L2"}
 )
@@ -92,7 +107,7 @@ _ATTR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def as_list(value: Any) -> List[Any]:
-    """把标量规整为单元素列表；None 视为空列表；列表/元组原样返回。"""
+    """Normalize a scalar to a one-element list; None -> []; lists/tuples pass through."""
     if value is None:
         return []
     if isinstance(value, (list, tuple)):
@@ -101,29 +116,30 @@ def as_list(value: Any) -> List[Any]:
 
 
 def normalize_dtype(value: Any) -> str:
-    """dtype 归一：去空白并小写。未知值保留，交校验阶段裁决。"""
+    """Normalize a dtype: strip whitespace and lower-case. Unknown values are kept for validation."""
     return str(value).strip().lower()
 
 
 def normalize_format(value: Any) -> str:
-    """format 归一：去空白并大写。未知值保留，交校验阶段裁决。"""
+    """Normalize a format: strip whitespace and upper-case. Unknown values are kept for validation."""
     return str(value).strip().upper()
 
 
 def _check_identifier(value: str, what: str) -> None:
     if not value:
-        raise OpSpecError(f"{what} 不能为空", hint="请提供非空名称")
+        raise OpSpecError(t("check.name_empty", what=what), hint=t("check.name_empty.hint"))
     if not _OP_TYPE_RE.match(value):
         raise OpSpecError(
-            f"{what} '{value}' 不合法",
-            hint="须为字母/下划线开头，仅含字母、数字、下划线（会用于生成文件名/类名）",
+            t("check.name_invalid", what=what, value=value),
+            hint=t("check.name_invalid.hint"),
         )
 
 
 def camel_to_snake(name: str) -> str:
-    """PascalCase/camelCase → snake_case（官方 op_type → 文件名/函数名规则）。
+    """Convert PascalCase/camelCase to snake_case (official op_type -> file/function rule).
 
-    例：AddCustomTemplate → add_custom_template。连续大写按最后一个大写字母切分。
+    E.g. AddCustomTemplate -> add_custom_template. Consecutive capitals are
+    split at the last capital before a lower-case run.
     """
     s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
@@ -135,34 +151,36 @@ def camel_to_snake(name: str) -> str:
 
 @dataclass
 class TensorSpec:
-    """单个输入/输出张量描述。字段名对齐官方原型 JSON 条目。
+    """A single input/output tensor descriptor; field names match the official prototype JSON entry.
 
-    ``format`` 与 ``type`` 是并行数组：例如 format=["ND","ND"]、type=["float16","float"]
-    表示该张量支持 (ND, float16) 与 (ND, float) 两种组合。
-    为方便使用，也允许在构造/YAML 中传单个字符串，会自动转为单元素列表。
+    ``format`` and ``type`` are parallel arrays: e.g. format=["ND","ND"] and
+    type=["float16","float"] mean the tensor supports both (ND, float16) and
+    (ND, float) combinations. For convenience a single string is accepted for
+    either side and is promoted to a one-element list automatically.
     """
 
     name: str
     type: List[str] = field(default_factory=lambda: ["float"])
     format: List[str] = field(default_factory=lambda: ["ND"])
     param_type: str = ParamType.REQUIRED.value
-    #: 可选：算子形状提示（如 [1024, 1024]，支持 -1 动态）。仅作元信息，不进入 msopgen 命令。
+    #: Optional shape hint (e.g. [1024, 1024], -1 allowed for dynamic dims).
+    #: Metadata only; never enters the msopgen command.
     shape: Optional[List[int]] = None
 
     def __post_init__(self) -> None:
-        self.type = [normalize_dtype(t) for t in as_list(self.type)] or ["float"]
+        self.type = [normalize_dtype(x) for x in as_list(self.type)] or ["float"]
         self.format = [normalize_format(f) for f in as_list(self.format)] or ["ND"]
         self.param_type = str(self.param_type).strip().lower()
         if self.shape is not None:
             self.shape = list(self.shape)
-        # 友好广播：一边为 1 时扩展到另一边长度。
-        # 例：type=[float16, float] 且未写 format → format 自动广播为 [ND, ND]。
+        # Friendly broadcast: a singleton side is stretched to the other side's
+        # length. E.g. type=[float16, float] without format -> format=[ND, ND].
         if len(self.type) == 1 and len(self.format) > 1:
             self.type = self.type * len(self.format)
         elif len(self.format) == 1 and len(self.type) > 1:
             self.format = self.format * len(self.type)
 
-    # -- 便捷只读属性（dtypes/formats 与官方字段 type/format 同义）--
+    # -- Convenience read-only aliases (dtypes/formats == type/format) --
     @property
     def dtypes(self) -> List[str]:
         return list(self.type)
@@ -176,33 +194,34 @@ class TensorSpec:
         _check_identifier(self.name, path)
         if self.param_type not in (ParamType.REQUIRED.value, ParamType.OPTIONAL.value):
             raise OpSpecError(
-                f"param_type '{self.param_type}' 不合法",
+                t("check.param_type_invalid", value=self.param_type),
                 field_path=path,
-                hint=f"取值应为 {ParamType.REQUIRED.value} 或 {ParamType.OPTIONAL.value}",
+                hint=t("check.param_type_invalid.hint"),
             )
         if len(self.format) != len(self.type):
             raise OpSpecError(
-                f"format 数组长度({len(self.format)})与 type 数组长度({len(self.type)})不一致",
+                t("check.type_format_len", fmt_len=len(self.format), type_len=len(self.type)),
                 field_path=path,
-                hint="两者须等长，下标相同者构成一组 format+dtype 组合（如 format=['ND','ND'] 与 type=['float16','float']）",
+                hint=t("check.type_format_len.hint"),
             )
         for i, dt in enumerate(self.type):
             if dt not in SUPPORTED_DTYPES:
                 raise OpSpecError(
-                    f"type[{i}] '{dt}' 不在支持的 dtype 集合内",
+                    t("check.dtype_unsupported", index=i, dtype=dt),
                     field_path=path,
-                    hint=f"合法取值示例：{', '.join(sorted(SUPPORTED_DTYPES))}",
+                    hint=t("check.supported_values.hint", values=", ".join(sorted(SUPPORTED_DTYPES))),
                 )
         for i, fm in enumerate(self.format):
             if fm not in SUPPORTED_FORMATS:
                 raise OpSpecError(
-                    f"format[{i}] '{fm}' 不在支持的 format 集合内",
+                    t("check.format_unsupported", index=i, fmt=fm),
                     field_path=path,
-                    hint=f"合法取值示例：{', '.join(sorted(SUPPORTED_FORMATS))}",
+                    hint=t("check.supported_values.hint", values=", ".join(sorted(SUPPORTED_FORMATS))),
                 )
 
     def to_dict(self) -> dict:
-        """转 dict：键序与官方原型 JSON 条目一致；单元素 type/format 仍以数组输出。"""
+        """Convert to dict; key order matches the official prototype JSON entry.
+        Singleton type/format are still emitted as arrays."""
         data = {
             "name": self.name,
             "param_type": self.param_type,
@@ -224,17 +243,20 @@ class TensorSpec:
                 shape=mapping.get("shape"),
             )
         except KeyError as exc:
-            raise OpSpecError("缺少必填字段", hint=f"张量条目须含 'name'（缺少 {exc.args[0]}）") from exc
+            raise OpSpecError(
+                t("check.missing_required"),
+                hint=t("check.tensor_needs_name.hint", key=exc.args[0]),
+            ) from exc
         spec.validate()
         return spec
 
 
 @dataclass
 class AttrSpec:
-    """标量属性描述，对齐官方原型 JSON ``attr_desc`` 条目（name/param_type/type/value）。"""
+    """Scalar attribute descriptor, matching the official ``attr_desc`` entry (name/param_type/type/value)."""
 
     name: str
-    type: str = "int"  # 属性类型字符串（如 int/float/bool/string/listInt...），不强制白名单
+    type: str = "int"  # Type string (int/float/bool/string/listInt...); not restricted to a whitelist
     value: Any = None
     param_type: str = ParamType.REQUIRED.value
 
@@ -246,12 +268,12 @@ class AttrSpec:
         path = f"{field_path}.{self.name}" if field_path else self.name
         _check_identifier(self.name, path)
         if not self.type:
-            raise OpSpecError("属性 type 不能为空", field_path=path)
+            raise OpSpecError(t("check.attr_type_empty"), field_path=path)
         if self.param_type not in (ParamType.REQUIRED.value, ParamType.OPTIONAL.value):
             raise OpSpecError(
-                f"param_type '{self.param_type}' 不合法",
+                t("check.param_type_invalid", value=self.param_type),
                 field_path=path,
-                hint=f"取值应为 {ParamType.REQUIRED.value} 或 {ParamType.OPTIONAL.value}",
+                hint=t("check.param_type_invalid.hint"),
             )
 
     def to_dict(self) -> dict:
@@ -270,7 +292,10 @@ class AttrSpec:
                 param_type=mapping.get("param_type", ParamType.REQUIRED.value),
             )
         except KeyError as exc:
-            raise OpSpecError("缺少必填字段", hint=f"属性条目须含 'name'（缺少 {exc.args[0]}）") from exc
+            raise OpSpecError(
+                t("check.missing_required"),
+                hint=t("check.attr_needs_name.hint", key=exc.args[0]),
+            ) from exc
         spec.validate()
         return spec
 
@@ -281,17 +306,18 @@ class AttrSpec:
 
 @dataclass
 class OpSpec:
-    """一个算子的完整元信息。
+    """Complete metadata for one operator.
 
-    关键字段：
-    - ``op_type``：算子类型名（PascalCase，如 AddCustomTemplate / Sigmoid）；
-    - ``soc_version``：基础昇腾 SoC 版本（如 ``ascend910b1``），msopgen 的 ``-c`` 参数
-      在命令生成层拼成 ``ai_core-<soc_version>``（见 msopgen.py / official-patterns §1.2）；
-    - ``language``：官方 JSON 可选字段，固定 ``cpp``（Ascend C）；
-    - ``inputs`` / ``outputs``：输入/输出 TensorSpec 列表；
-    - ``attrs``：标量属性；
-    - ``tiling``：Tiling 预留 dict（本轮不做策略，仅为后续轮扩展占位）；
-    - ``description``：算子一句话描述。
+    Key fields:
+    - ``op_type``: PascalCase operator type name (e.g. AddCustomTemplate / Sigmoid);
+    - ``soc_version``: base Ascend SoC version (e.g. ``ascend910b1``); the msopgen
+      ``-c`` argument is composed as ``ai_core-<soc_version>`` at command build time
+      (see msopgen.py / official-patterns SS1.2);
+    - ``language``: optional official JSON field, fixed ``cpp`` (Ascend C);
+    - ``inputs`` / ``outputs``: input/output TensorSpec lists;
+    - ``attrs``: scalar attributes;
+    - ``tiling``: reserved dict for future strategies (not used in this phase);
+    - ``description``: one-line operator description.
     """
 
     op_type: str
@@ -302,7 +328,7 @@ class OpSpec:
     tiling: dict = field(default_factory=dict)
     language: str = "cpp"
     description: str = ""
-    #: 元信息：来源文件路径（由 load_op_spec 注入；不参与 YAML 序列化）
+    #: Metadata: source file path (injected by load_op_spec; not serialized to YAML)
     source: Optional[str] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -310,23 +336,30 @@ class OpSpec:
         self.soc_version = str(self.soc_version).strip()
         self.language = str(self.language).strip().lower() or "cpp"
 
-    # -- 便捷只读属性 --
+    # -- Convenience read-only properties --
     @property
     def op_name_snake(self) -> str:
-        """snake_case 形式，对应官方 op_type → 文件/函数名规则（如 AddCustomTemplate → add_custom_template）。"""
+        """snake_case form, matching the official op_type -> file/function rule
+        (e.g. AddCustomTemplate -> add_custom_template)."""
         return camel_to_snake(self.op_type)
 
     def validate(self) -> None:
         _check_identifier(self.op_type, "op_type")
         if not self.soc_version:
-            raise OpSpecError("soc_version 不能为空", hint="如 ascend910b1（msopgen -c 会拼为 ai_core-ascend910b1）")
+            raise OpSpecError(
+                t("check.soc_empty"),
+                hint=t("check.soc_empty.hint"),
+            )
         if not _SOC_RE.match(self.soc_version):
             raise OpSpecError(
-                f"soc_version '{self.soc_version}' 不合法",
-                hint="仅含字母/数字/下划线/连字符，且字母开头；不必带 ai_core- 前缀",
+                t("check.soc_invalid", value=self.soc_version),
+                hint=t("check.soc_invalid.hint"),
             )
         if self.language not in ("cpp",):
-            raise OpSpecError(f"language '{self.language}' 不合法", hint="当前仅支持 cpp（Ascend C）")
+            raise OpSpecError(
+                t("check.language_invalid", value=self.language),
+                hint=t("check.language_model.hint"),
+            )
 
         seen: dict = {}
         for kind in ("inputs", "outputs"):
@@ -335,34 +368,38 @@ class OpSpec:
                 key = tensor.name
                 if key in seen:
                     raise OpSpecError(
-                        f"名称 '{key}' 重复",
+                        t("check.dup_name", name=key),
                         field_path=f"{kind}[{idx}]",
-                        hint="算子所有输入/输出的 name 必须唯一",
+                        hint=t("check.dup_name_tensor.hint"),
                     )
                 seen[key] = kind
         if not self.outputs:
-            raise OpSpecError("outputs 不能为空", hint="算子至少需要一个输出张量")
+            raise OpSpecError(
+                t("check.outputs_empty"),
+                hint=t("check.outputs_empty.hint"),
+            )
 
         for idx, attr in enumerate(self.attrs):
             attr.validate(field_path=f"attrs[{idx}]")
             if attr.name in seen:
                 raise OpSpecError(
-                    f"名称 '{attr.name}' 重复",
+                    t("check.dup_name", name=attr.name),
                     field_path=f"attrs[{idx}]",
-                    hint="属性名不得与输入/输出张量重名",
+                    hint=t("check.dup_name_attr.hint"),
                 )
 
-    # -- 序列化 --
+    # -- Serialization --
     def to_dict(self) -> dict:
-        """输出顺序稳定：op_type → soc_version → language → inputs → outputs → attrs → tiling → description。"""
+        """Stable key order: op_type -> soc_version -> language -> inputs -> outputs
+        -> attrs -> tiling -> description."""
         data: dict = {
             "op_type": self.op_type,
             "soc_version": self.soc_version,
         }
         if self.language != "cpp":
             data["language"] = self.language
-        data["inputs"] = [t.to_dict() for t in self.inputs]
-        data["outputs"] = [t.to_dict() for t in self.outputs]
+        data["inputs"] = [x.to_dict() for x in self.inputs]
+        data["outputs"] = [x.to_dict() for x in self.outputs]
         if self.attrs:
             data["attrs"] = [a.to_dict() for a in self.attrs]
         if self.tiling:
@@ -374,10 +411,16 @@ class OpSpec:
     @classmethod
     def from_dict(cls, mapping: Mapping[str, Any]) -> "OpSpec":
         if not isinstance(mapping, dict):
-            raise OpSpecError("顶层应为 YAML 映射（键值对）", hint="请检查 YAML 结构，示例见 examples/add.yaml")
+            raise OpSpecError(
+                t("check.top_mapping"),
+                hint=t("check.top_mapping.hint"),
+            )
         missing = [k for k in ("op_type",) if not mapping.get(k)]
         if missing:
-            raise OpSpecError("缺少必填字段", hint=f"顶层须含 'op_type'（缺少 {', '.join(missing)}）")
+            raise OpSpecError(
+                t("check.missing_required"),
+                hint=t("check.missing_op_type.hint", keys=", ".join(missing)),
+            )
 
         spec = cls(
             op_type=str(mapping["op_type"]).strip(),

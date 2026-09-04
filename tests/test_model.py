@@ -1,4 +1,10 @@
-"""OpSpec/TensorSpec/AttrSpec 模型与校验的最小测试集。"""
+"""Minimal tests for the OpSpec/TensorSpec/AttrSpec model and validation.
+
+Assertion fragments in this file match the Simplified Chinese templates of the
+i18n catalog (the default language; see tests/conftest.py).
+"""
+
+from __future__ import annotations
 
 import pytest
 
@@ -12,7 +18,7 @@ from cann_ophelper.model import (
 
 
 def _add_spec(**overrides):
-    """构造一个合法的 Add 元信息；overrides 直接覆盖 OpSpec 顶层字段。"""
+    """Build a valid Add metadata object; overrides replace OpSpec top-level fields."""
     base = dict(
         op_type="AddCustomTemplate",
         soc_version="ascend910b1",
@@ -57,12 +63,13 @@ class TestOpSpecValidation:
             spec.validate()
 
     def test_soc_can_carry_prefix(self):
-        # 允许带前缀的 soc 值（不报错，交给 msopgen.format_soc_for_msopgen 去重）
+        # A prefixed soc value is allowed (format_soc_for_msopgen deduplicates later)
         spec = _add_spec(soc_version="ai_core-ascend910b1")
         spec.validate()
 
     def test_op_name_snake_case_convention(self):
-        # 官方 op_type → 文件名/函数名采用 snake_case（AddCustomTemplate → add_custom_template）
+        # Official op_type -> file/function name uses snake_case
+        # (AddCustomTemplate -> add_custom_template)
         assert _add_spec().op_name_snake == "add_custom_template"
 
 
@@ -76,7 +83,8 @@ class TestTensorSpecValidation:
             spec.validate()
 
     def test_mismatched_type_format_arrays_rejected(self):
-        # 两边都 >1 且不等长才算不匹配（单侧为 1 会被广播，属合法简写）
+        # A mismatch only matters when both sides are >1 in length
+        # (a singleton side is broadcast, which is a legal shorthand)
         tensor = TensorSpec(name="x", type=["float16", "float", "int32"], format=["ND", "ND"])
         with pytest.raises(OpSpecError, match="长度"):
             tensor.validate()
@@ -92,7 +100,8 @@ class TestTensorSpecValidation:
             tensor.validate()
 
     def test_singleton_side_is_broadcast(self):
-        # 只给多 dtype、省略 format → format 自动广播；反之亦然
+        # Giving several dtypes but omitting format -> format is broadcast, and
+        # vice versa
         a = TensorSpec(name="a", type=["float16", "float"], format="ND")
         a.validate()
         assert a.format == ["ND", "ND"]
@@ -110,7 +119,7 @@ class TestTensorSpecValidation:
         tensor.validate()
         assert tensor.type == ["float"]
         assert tensor.format == ["ND"]
-        assert tensor.dtypes == ["float"]  # 便捷只读属性
+        assert tensor.dtypes == ["float"]  # convenience read-only alias
 
 
 class TestAttrSpecValidation:
@@ -121,7 +130,7 @@ class TestAttrSpecValidation:
 
     def test_attr_duplicate_with_tensor_rejected(self):
         spec = _add_spec(
-            attrs=[AttrSpec(name="z", type="int")],  # z 是输出名，应冲突
+            attrs=[AttrSpec(name="z", type="int")],  # z collides with the output name
         )
         with pytest.raises(OpSpecError, match="不得与输入/输出张量重名"):
             spec.validate()
@@ -131,10 +140,10 @@ class TestSerializationRoundTrip:
     def test_to_dict_order_is_stable(self):
         spec = _add_spec(description="加法")
         d = spec.to_dict()
-        # 顶层字段序保持稳定，便于 diff
+        # Keep the top-level key order stable for clean diffs
         assert list(d)[:2] == ["op_type", "soc_version"]
         assert "inputs" in d and "outputs" in d
-        # 默认 language=cpp 不输出，空 attrs/tiling 不输出
+        # Default language=cpp is not emitted; empty attrs/tiling are omitted too
         assert "language" not in d
         assert "attrs" not in d
         assert "tiling" not in d
@@ -142,4 +151,4 @@ class TestSerializationRoundTrip:
     def test_from_dict_roundtrip(self):
         spec = _add_spec(description="加法")
         clone = OpSpec.from_dict(spec.to_dict())
-        assert clone == spec  # dataclass 值相等（source/repr 字段不影响比较）
+        assert clone == spec  # dataclass value equality (source/repr excluded)

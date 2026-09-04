@@ -1,4 +1,11 @@
-"""msopgen：命令拼装断言（参数顺序、soc 前缀、引号、路径透传）最小测试集。"""
+"""Minimal tests for msopgen command assembly (argument order, soc prefix,
+quoting and path passthrough).
+
+Assertion fragments in this file match the Simplified Chinese templates of the
+i18n catalog (the default language; see tests/conftest.py).
+"""
+
+from __future__ import annotations
 
 import pytest
 
@@ -59,7 +66,7 @@ class TestBuildCommand:
 
     def test_parameter_order_stable(self):
         cmd = build_msopgen_command(_spec(), "p.json", "o")
-        # 依官方样例顺序：-i → -c → -lan → -out
+        # follow the official example order: -i -> -c -> -lan -> -out
         assert cmd.index("-i") < cmd.index("-c") < cmd.index("-lan") < cmd.index("-out")
 
     def test_prefixed_soc_not_doubled(self):
@@ -72,7 +79,7 @@ class TestBuildCommand:
 
     def test_invalid_spec_rejected_before_output(self):
         bad = _spec()
-        bad.outputs = []  # 绕过 dataclass 构造直接破坏校验
+        bad.outputs = []  # bypass dataclass construction to break validation
         with pytest.raises(OpSpecError, match="outputs 不能为空"):
             build_msopgen_command(bad, "p.json", "o")
 

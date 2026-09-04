@@ -34,5 +34,8 @@ cann-ophelper = "cann_ophelper.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+cann_ophelper = ["template/templates/**/*.j2"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

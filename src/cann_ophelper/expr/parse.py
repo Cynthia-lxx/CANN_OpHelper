@@ -57,7 +57,10 @@ def _grammar() -> str:
 def _parser():  # type: ignore[no-untyped-def]
     if not _LARK_AVAILABLE:
         raise OpSpecError(t("expr.parse.lark_missing"), hint=t("expr.parse.lark_missing.hint"))
-    return Lark(_grammar(), parser="earley", start="start", lexer="auto")
+    # keep_all_tokens: operator terminals ("+", "*", "/", ...) are anonymous and
+    # would otherwise be filtered out of the tree, breaking the sum/product
+    # fold below (it must see each operator between two operands).
+    return Lark(_grammar(), parser="earley", start="start", lexer="auto", keep_all_tokens=True)
 
 
 class _ToAst(_TRANSFORMER_BASE):  # type: ignore[misc,valid-type]
@@ -81,6 +84,12 @@ class _ToAst(_TRANSFORMER_BASE):  # type: ignore[misc,valid-type]
 
     def group(self, items):  # type: ignore[no-untyped-def]
         return items[1]
+
+    def atom(self, items):  # type: ignore[no-untyped-def]
+        # Only reachable for the parenthesised "(" sum ")" alternative, which
+        # keeps its node (multiple children); the paren tokens surround the
+        # single real expression.
+        return next(item for item in items if isinstance(item, ExprNode))
 
     def call(self, items):  # type: ignore[no-untyped-def]
         fn = str(items[0])

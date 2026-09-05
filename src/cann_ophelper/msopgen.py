@@ -5,8 +5,9 @@ Command format follows the official docs (see docs/official-patterns.md SS1.2):
     msopgen gen -i <prototype JSON> -c ai_core-<soc> -lan cpp -out <output dir>
 
 This module only does **pure text assembly**, with no filesystem side effects.
-The prototype JSON is supplied by the user (this tool neither generates nor
-parses its content -- rule 6.4).
+The prototype JSON given as ``-i`` may be hand-written or derived from a
+validated OpSpec through ``cann_ophelper.proto`` (workspace rule 6.4 allows
+that mechanical translation only; attrs are not exportable yet).
 
 All user-facing messages are resolved through ``cann_ophelper.i18n``.
 """

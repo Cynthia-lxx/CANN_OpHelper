@@ -7,6 +7,7 @@ explicitly with ``--lang en``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from typer.testing import CliRunner
 
 from cann_ophelper import __version__
 from cann_ophelper.cli import DEFAULT_OUT, DEFAULT_PROTO, app
+from cann_ophelper.proto import prototype_json_text
 from cann_ophelper.template import render
 from cann_ophelper.yamlio import load_op_spec
 
@@ -36,16 +38,31 @@ outputs:
 """
 
 
-def invoke(*args: str):
-    return runner.invoke(app, list(args))
+def invoke(*args: str, **kwargs):
+    return runner.invoke(app, list(args), **kwargs)
 
 
 def test_help_lists_commands() -> None:
     result = invoke("--help")
     assert result.exit_code == 0
     assert "gen-msopgen" in result.output
+    assert "new-op" in result.output
     assert "render" in result.output
     assert "--lang" in result.output
+
+
+def test_new_op_help_shows_flags() -> None:
+    result = invoke("new-op", "--help")
+    assert result.exit_code == 0
+    assert "--from" in result.output
+    assert "--yes" in result.output
+    assert "--out" in result.output
+
+
+def test_gen_msopgen_help_shows_proto_out() -> None:
+    result = invoke("gen-msopgen", "--help")
+    assert result.exit_code == 0
+    assert "--proto-out" in result.output
 
 
 def test_version_flag() -> None:
@@ -152,3 +169,113 @@ def test_render_missing_file_fails() -> None:
     result = invoke("render", "no_such_file.yaml")
     assert result.exit_code == 1
     assert "文件不存在" in result.output
+
+
+# ---------------------------------------------------------------------------
+# new-op
+# ---------------------------------------------------------------------------
+
+#: Number of prompts answered by pressing Enter when the 'add' preset pre-fills
+#: every field: 3 basics + 2 counts + 5 per tensor x 3 tensors.
+PRESET_PROMPT_COUNT = 3 + 2 + 5 * 3
+
+
+def test_new_op_from_preset_writes_yaml(tmp_path: Path) -> None:
+    target = tmp_path / "add_spec.yaml"
+    result = invoke(
+        "new-op", "--from", "add", "--yes", "--out", str(target),
+        input="\n" * PRESET_PROMPT_COUNT,
+    )
+    assert result.exit_code == 0, result.output
+    assert "已写入算子描述" in result.output
+    spec = load_op_spec(target)
+    assert spec.op_type == "AddCustomTemplate"
+    assert [t.name for t in spec.inputs] == ["x", "y"]
+    assert spec.inputs[0].type == ["float16", "float"]
+
+
+def test_new_op_from_preset_default_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without --out the YAML lands as <snake_case>.yaml in the working dir."""
+    monkeypatch.chdir(tmp_path)
+    result = invoke(
+        "new-op", "--from", "add", "--yes", input="\n" * PRESET_PROMPT_COUNT
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "add_custom_template.yaml").is_file()
+
+
+def test_new_op_cancel_writes_nothing(tmp_path: Path) -> None:
+    target = tmp_path / "cancelled.yaml"
+    # answer all collection prompts, then decline the confirmation
+    result = invoke(
+        "new-op", "--from", "add", "--out", str(target),
+        input="\n" * PRESET_PROMPT_COUNT + "n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "已取消" in result.output
+    assert not target.exists()
+
+
+def test_new_op_unknown_preset_fails() -> None:
+    result = invoke("new-op", "--from", "bogus", "--yes")
+    assert result.exit_code == 1
+    assert "未知预设" in result.output
+    assert "add" in result.output
+
+
+def test_new_op_interactive_custom_input(tmp_path: Path) -> None:
+    """A fully interactive run: scripted non-default answers, no preset.
+
+    Per tensor the wizard asks, in order: name, param_type, dtype list,
+    format list, shape. An empty answer means "keep the default" (or the
+    parser's own fallback such as required/ND/float).
+    """
+    target = tmp_path / "custom.yaml"
+    answers = "\n".join(
+        [
+            "MulSimple",   # op_type
+            "ascend910b1",  # soc
+            "",             # description
+            "2",            # number of inputs
+            "1",            # number of outputs
+            # input a
+            "a", "", "float16", "", "64",
+            # input b
+            "b", "", "float16", "", "64",
+            # output c
+            "c", "", "float16", "", "64",
+        ]
+    )
+    result = invoke(
+        "new-op", "--yes", "--out", str(target), input=answers + "\n",
+    )
+    assert result.exit_code == 0, result.output
+    spec = load_op_spec(target)
+    assert spec.op_type == "MulSimple"
+    assert [t.name for t in spec.inputs] == ["a", "b"]
+    assert [t.name for t in spec.outputs] == ["c"]
+    assert spec.inputs[0].type == ["float16"]
+    assert spec.inputs[0].format == ["ND"]
+    assert spec.outputs[0].shape == [64]
+
+
+# ---------------------------------------------------------------------------
+# gen-msopgen --proto-out
+# ---------------------------------------------------------------------------
+
+def test_gen_msopgen_proto_out_writes_prototype(tmp_path: Path) -> None:
+    proto = tmp_path / "nested" / "add_custom.json"
+    result = invoke("gen-msopgen", str(EXAMPLES_YAML), "--proto-out", str(proto))
+    assert result.exit_code == 0, result.output
+    assert "原型 JSON 已写入" in result.output
+
+    spec = load_op_spec(EXAMPLES_YAML)
+    expected = json.loads(prototype_json_text(spec))
+    assert json.loads(proto.read_text(encoding="utf-8")) == expected
+
+
+def test_gen_msopgen_without_proto_out_writes_nothing(tmp_path: Path) -> None:
+    """Backward compatibility: no --proto-out means no filesystem writes."""
+    result = invoke("gen-msopgen", str(EXAMPLES_YAML))
+    assert result.exit_code == 0
+    assert "原型 JSON 已写入" not in result.output

@@ -1,10 +1,15 @@
 """cann_ophelper.cli -- Typer command-line interface for CANN_OpHelper.
 
-Two commands expose the official msopgen workflow (docs/official-patterns.md):
+Three commands expose the official msopgen workflow (docs/official-patterns.md):
 
+- ``new-op``: collect an operator spec interactively (or from a built-in
+  preset such as ``add``) and save it as YAML -- no more hand-writing a
+  prototype file from scratch.
 - ``gen-msopgen``: validate an operator spec YAML, preview its metadata and
   print the ready-to-run ``msopgen`` command together with the cloud execution
-  steps. It performs no filesystem writes.
+  steps. With ``--proto-out`` it additionally exports the official prototype
+  JSON (derived mechanically from the spec) to a local file. It performs no
+  other filesystem writes.
 - ``render``: render the ``op_kernel``/``op_host`` artifacts from a spec YAML.
   With ``--out`` the three files are written into that directory -- the local
   copy of an msopgen project -- overwriting what is already there; without
@@ -30,8 +35,10 @@ from . import __version__
 from .i18n import SUPPORTED_LANGUAGES, set_language, t
 from .model import OpSpec, OpSpecError, TensorSpec
 from .msopgen import build_msopgen_command, show_cloud_instructions
+from .proto import dump_prototype_json
 from .template import render as render_artifacts
-from .yamlio import load_op_spec
+from .wizard import collect_op_spec, resolve_preset
+from .yamlio import dump_op_spec, load_op_spec
 
 __all__ = ["app", "main"]
 
@@ -176,6 +183,13 @@ def gen_msopgen(
         "--out",
         help="msopgen project output directory (cloud-side, msopgen '-out').",
     ),
+    proto_out: Optional[Path] = typer.Option(
+        None,
+        "--proto-out",
+        help="Also write the official msopgen prototype JSON to this local path "
+        "(derived mechanically from the spec; upload it to the cloud and point "
+        "msopgen '-i' at it).",
+    ),
 ) -> None:
     """Show operator metadata and the ready-to-run msopgen command."""
     console = _c()
@@ -191,6 +205,16 @@ def gen_msopgen(
     )
     console.print()
     console.print(show_cloud_instructions(spec, proto, out))
+
+    if proto_out is not None:
+        try:
+            dump_prototype_json(spec, proto_out)
+        except OpSpecError as exc:
+            _fail(str(exc))
+        console.print()
+        console.print(t("cli.proto_out.written"))
+        console.print(esc(str(proto_out)))
+        console.print(t("cli.proto_out.suggest"))
 
 
 def _preview_table(console: Console, files: Dict[str, str]) -> None:
@@ -270,3 +294,67 @@ def render(
         return
 
     _write_artifacts(console, files, out_dir)
+
+
+@app.command()
+def new_op(
+    from_preset: Optional[str] = typer.Option(
+        None,
+        "--from",
+        help="Start from a built-in preset (currently 'add') to prefill every "
+        "answer; empty replies keep the prefilled value.",
+    ),
+    out_path: Optional[Path] = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="Target path for the generated spec YAML (default: "
+        "<snake_case_name>.yaml in the current directory).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt.",
+    ),
+) -> None:
+    """Collect an operator spec interactively (or from a preset) and save it as YAML."""
+    console = _c()
+    seed = None
+    if from_preset:
+        try:
+            seed = resolve_preset(from_preset)
+        except OpSpecError as exc:
+            _fail(str(exc))
+        console.print(t("cli.new_op.preset_applied", preset=esc(from_preset)))
+
+    try:
+        spec = collect_op_spec(seed=seed, console=console)
+    except OpSpecError as exc:
+        _fail(str(exc))
+    except (EOFError, KeyboardInterrupt):
+        console.print(t("cli.new_op.cancelled"))
+        raise typer.Exit(code=1)
+
+    _print_overview(console, spec)
+
+    target = out_path or Path(f"{spec.op_name_snake}.yaml")
+    if not yes:
+        try:
+            confirmed = typer.confirm(
+                t("cli.new_op.confirm", path=esc(str(target))), default=True
+            )
+        except typer.Abort as exc:
+            raise typer.Exit(code=130) from exc
+        if not confirmed:
+            console.print(t("cli.new_op.cancelled"))
+            raise typer.Exit()
+
+    try:
+        dump_op_spec(spec, target)
+    except OpSpecError as exc:
+        _fail(str(exc))
+
+    console.print()
+    console.print(f"[bold green]{esc(t('cli.new_op.written', path=str(target)))}[/]")
+    console.print(t("cli.new_op.suggest", path=esc(str(target))))

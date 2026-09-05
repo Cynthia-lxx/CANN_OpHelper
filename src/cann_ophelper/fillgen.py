@@ -9,10 +9,21 @@ files that replace the corresponding files inside a msopgen project:
 - ``op_host/<entry>.cpp``        host (Tiling/InferShape/OpDef) mirroring the
                                  msopgen skeleton layout.
 
-v1 constraints enforced here: single output, single dtype ``float`` (DT_FLOAT,
-ND format), all tensors sharing the same type/format lists, and the official
-Add-teaching tiling assumption (total length divisible by the core count).
-These are validated before any text is generated.
+v1 constraints enforced here: single output, one uniform dtype from
+``{float, float16}`` (DT_FLOAT / DT_FLOAT16, ND format), all tensors sharing the
+same type/format lists.
+
+Dtype drives the generated shape of the kernel:
+
+- ``float`` (default, unchanged v1): official Add-teaching tiling that assumes
+  the total length is divisible by the core count (``totalLength/tileNum``).
+- ``float16``: 32B-block based big/small core tail tiling (``totalLength /
+  bigDataNum / smallDataNum / tailBlockNum``) so a total length that is a whole
+  number of 32B blocks but not of cores is still fully covered. Tail semantics
+  follow the official 03_intermediate Vector teaching (large cores take one
+  extra 32B block).
+
+Everything is validated before any text is generated.
 """
 
 from __future__ import annotations
@@ -85,7 +96,12 @@ class FileProfile:
     outputs: tuple[TensorRef, ...]
     soc: str = "ascend910b"
     block_dim: int = 8
-    cpp_dtype: str = "float"        # concrete C++ scalar type (v1: float)
+    dtype: str = "float"            # uniform canonical dtype ('float' | 'float16')
+    cpp_dtype: str = "float"        # concrete C++ scalar type ('float' | 'half')
+    type_len: int = 4               # sizeof(cpp_dtype) in bytes
+    #: Element count for verification assets, derived from TensorSpec.shape
+    #: hints (all declared tensors must agree). None -> legacy fixed 8*2048.
+    element_count: int | None = None
 
     @property
     def op_pascal(self) -> str:
@@ -168,11 +184,38 @@ def _tensor_ref(name: str, dtypes: Sequence[str], formats: Sequence[str]) -> Ten
     )
 
 
+_ALLOWED_DTYPES = frozenset({"float", "float16"})
+_DTYPE_TYPE_LEN = {"float": 4, "float16": 2}
+
+
+def _element_count_from_spec(spec: OpSpec) -> int | None:
+    """Flattened element count from the optional per-tensor shape hints.
+
+    All explicitly declared shapes must agree (InferShape copies input 0 to the
+    output) and may not contain dynamic (-1) dimensions -- verification needs a
+    concrete size. Specs without shape hints keep the legacy default.
+    """
+    declared: list[list[int]] = [list(t.shape) for t in (*spec.inputs, *spec.outputs) if t.shape]
+    if not declared:
+        return None
+    unique = {tuple(shape) for shape in declared}
+    if len(unique) != 1:
+        raise OpSpecError(t("fillgen.err.shape_conflict"))
+    (shape,) = unique
+    if any(dim < 0 for dim in shape):
+        raise OpSpecError(t("fillgen.err.shape_dynamic"), hint=t("fillgen.err.shape_dynamic.hint"))
+    count = 1
+    for dim in shape:
+        count *= int(dim)
+    return count
+
+
 def profile_from_spec(spec: OpSpec) -> FileProfile:
     """Build a FileProfile from an OpSpec (used by gen-op / fill-op).
 
-    Validates the v1 contract (single dtype float, ND, one output, identifier
-    safety, no ambiguous identifier collisions).
+    Validates the v1 contract (uniform dtype from {float, float16}, ND, one
+    output, identifier safety, no ambiguous identifier collisions) and derives
+    the tiling style + verification element count from the dtype/shape hints.
     """
     if not spec.outputs or len(spec.outputs) != 1:
         raise OpSpecError(t("fillgen.err.single_output"), hint=t("fillgen.err.single_output.hint"))
@@ -190,15 +233,16 @@ def profile_from_spec(spec: OpSpec) -> FileProfile:
         _tensor_ref(tens.name, tens.type, tens.format) for tens in spec.outputs
     )
 
-    # All tensors must share the same dtype (DTYPE_X single-float contract).
+    # All tensors must share the same dtype, from the supported v1 set.
     dtype_set = {ref.dtype for ref in (*inputs, *outputs)}
     if len(dtype_set) != 1:
         raise OpSpecError(t("fillgen.err.dtype_uniform", values=", ".join(sorted(dtype_set))))
-    if {"float"} != dtype_set:
+    if not dtype_set <= _ALLOWED_DTYPES:
         raise OpSpecError(
             t("fillgen.err.dtype_v1", values=", ".join(sorted(dtype_set))),
             hint=t("fillgen.err.dtype_v1.hint"),
         )
+    dtype = next(iter(dtype_set))
 
     bases = [t.name[:1].lower() + t.name[1:] for t in (*inputs, *outputs)]
     if len(set(bases)) != len(bases):
@@ -215,7 +259,10 @@ def profile_from_spec(spec: OpSpec) -> FileProfile:
         outputs=outputs,
         soc=_clean_soc(spec.soc_version),
         block_dim=8,
-        cpp_dtype="float",
+        dtype=dtype,
+        cpp_dtype="half" if dtype == "float16" else "float",
+        type_len=_DTYPE_TYPE_LEN[dtype],
+        element_count=_element_count_from_spec(spec),
     )
 
 
@@ -245,17 +292,17 @@ def _var_for(slot: str, names: set[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _statement_lines(stmt, names: set[str]) -> str:
+def _statement_lines(stmt, names: set[str], ctype: str = "float", count: str = "this->tileLength") -> str:
     dst = _var_for(stmt.dst, names)
     if stmt.op == "dup":
         assert stmt.scalar is not None
-        return f"        AscendC::Duplicate<float>({dst}, (float){fmt_num(stmt.scalar)}, this->tileLength);"
+        return f"        AscendC::Duplicate<{ctype}>({dst}, ({ctype}){fmt_num(stmt.scalar)}, {count});"
     if stmt.op == "neg":
         src = _var_for(stmt.srcs[0], names)
-        return f"        AscendC::Muls({dst}, {src}, (float)-1, this->tileLength);"
+        return f"        AscendC::Muls({dst}, {src}, ({ctype})-1, {count});"
     fn = _OP_FN[stmt.op]
     srcs = ", ".join(_var_for(s, names) for s in stmt.srcs)
-    return f"        AscendC::{fn}({dst}, {srcs}, this->tileLength);"
+    return f"        AscendC::{fn}({dst}, {srcs}, {count});"
 
 
 def _scratch_indices(program: ExprProgram) -> list[int]:
@@ -410,8 +457,197 @@ def _build_kernel(profile: FileProfile, program: ExprProgram) -> str:
 
 
 # ---------------------------------------------------------------------------
+# fp16 (half) tail-aware kernel + tiling
+#
+# float16 tensors move 32B per block (16 halfs). The host splits the total
+# length into 32B blocks and hands the first ``tailBlockNum`` cores one extra
+# block (big cores), mirroring the official 03_intermediate Vector teaching.
+# The kernel picks its per-core data length + GM offset from its block index.
+# ---------------------------------------------------------------------------
+
+
+def _build_kernel_fp16(profile: FileProfile, program: ExprProgram) -> str:
+    names = _all_tensor_names(profile)
+    scratch_idx = _scratch_indices(program)
+    entry = profile.entry
+    cls = profile.kernel_class
+    st = profile.tiling_struct
+
+    inits: list[str] = []
+    gms: list[str] = []
+    queues: list[str] = []
+    members: list[str] = []
+    copy_in: list[str] = []
+    compute_heads: list[str] = []
+    compute_tails: list[str] = []
+    stmts: list[str] = []
+    copy_out: list[str] = []
+
+    inits.append("        uint32_t blockIdx = AscendC::GetBlockIdx();")
+    inits.append("        this->bigDataNum = bigDataNum;")
+    inits.append("        this->smallDataNum = smallDataNum;")
+    inits.append("        this->tailBlockNum = tailBlockNum;")
+    inits.append("        bool isBigCore = blockIdx < this->tailBlockNum;")
+    inits.append("        this->dataNum = isBigCore ? this->bigDataNum : this->smallDataNum;")
+    inits.append("        uint32_t gmOffset = isBigCore ?")
+    inits.append("            blockIdx * this->bigDataNum :")
+    inits.append(
+        "            this->tailBlockNum * this->bigDataNum + (blockIdx - this->tailBlockNum) * this->smallDataNum;"
+    )
+
+    for ref in profile.inputs:
+        base = tensor_var(ref.name)
+        inits.append(f"        {base}Gm.SetGlobalBuffer((__gm__ half *){base} + gmOffset, this->dataNum);")
+        inits.append(f"        pipe.InitBuffer(inQueue{ref.name}, BUFFER_NUM, this->dataNum * sizeof(half));")
+        queues.append(f"    AscendC::TQue<AscendC::TPosition::VECIN, QUEUE_DEPTH> inQueue{ref.name};")
+        gms.append(f"    AscendC::GlobalTensor<half> {base}Gm;")
+        copy_in.append(f"        AscendC::LocalTensor<half> {base}Local = inQueue{ref.name}.AllocTensor<half>();")
+        copy_in.append(f"        AscendC::DataCopy({base}Local, {base}Gm[0], this->dataNum);")
+        copy_in.append(f"        inQueue{ref.name}.EnQue({base}Local);")
+        compute_heads.append(f"        AscendC::LocalTensor<half> {base}Local = inQueue{ref.name}.DeQue<half>();")
+
+    for ref in profile.outputs:
+        base = tensor_var(ref.name)
+        inits.append(f"        {base}Gm.SetGlobalBuffer((__gm__ half *){base} + gmOffset, this->dataNum);")
+        inits.append(f"        pipe.InitBuffer(outQueue{ref.name}, BUFFER_NUM, this->dataNum * sizeof(half));")
+        queues.append(f"    AscendC::TQue<AscendC::TPosition::VECOUT, QUEUE_DEPTH> outQueue{ref.name};")
+        gms.append(f"    AscendC::GlobalTensor<half> {base}Gm;")
+        compute_heads.append(f"        AscendC::LocalTensor<half> {base}Local = outQueue{ref.name}.AllocTensor<half>();")
+        compute_tails.append(f"        outQueue{ref.name}.EnQue({base}Local);")
+        copy_out.append(f"        AscendC::LocalTensor<half> {base}Local = outQueue{ref.name}.DeQue<half>();")
+        copy_out.append(f"        AscendC::DataCopy({base}Gm[0], {base}Local, this->dataNum);")
+        copy_out.append(f"        outQueue{ref.name}.FreeTensor({base}Local);")
+
+    # Free input tensors after enqueuing outputs (must free all dequeued tensors).
+    for ref in profile.inputs:
+        compute_tails.append(f"        inQueue{ref.name}.FreeTensor({tensor_var(ref.name)}Local);")
+
+    for idx in scratch_idx:
+        inits.append(f"        pipe.InitBuffer(tmp{idx}, this->dataNum * sizeof(half));")
+        members.append(f"    AscendC::TBuf<AscendC::TPosition::VECCALC> tmp{idx};")
+        stmts.append(f"        AscendC::LocalTensor<half> s{idx} = tmp{idx}.Get<half>();")
+
+    for stmt in program.statements:
+        stmts.append(_statement_lines(stmt, names, ctype="half", count="this->dataNum"))
+
+    return "\n".join(
+        [
+            LICENSE,
+            "",
+            "",
+            f'#include "kernel_operator.h"',
+            f'#include "{entry}_tiling.h"',
+            f"constexpr int32_t BUFFER_NUM = {_BUFFER_NUM};  // tensor num for each queue",
+            f"constexpr int32_t QUEUE_DEPTH = {_QUEUE_DEPTH};",
+            "",
+            f"class {cls} {{",
+            "public:",
+            f"    __aicore__ inline {cls}() {{}}",
+            "    __aicore__ inline void Init(GM_ADDR " + ", GM_ADDR ".join(
+                tensor_var(r.name) for r in (*profile.inputs, *profile.outputs)
+            ) + ", uint32_t bigDataNum, uint32_t smallDataNum, uint32_t tailBlockNum)",
+            "    {",
+            *inits,
+            "    }",
+            "",
+            "    __aicore__ inline void Process()",
+            "    {",
+            "        CopyIn();",
+            "        Compute();",
+            "        CopyOut();",
+            "    }",
+            "",
+            "private:",
+            "    __aicore__ inline void CopyIn()",
+            "    {",
+            *copy_in,
+            "    }",
+            "    __aicore__ inline void Compute()",
+            "    {",
+            *compute_heads,
+            *stmts,
+            *compute_tails,
+            "    }",
+            "    __aicore__ inline void CopyOut()",
+            "    {",
+            *copy_out,
+            "    }",
+            "",
+            "private:",
+            "    AscendC::TPipe pipe;",
+            *queues,
+            *gms,
+            *members,
+            "    uint32_t dataNum;",
+            "    uint32_t bigDataNum;",
+            "    uint32_t smallDataNum;",
+            "    uint32_t tailBlockNum;",
+            "};",
+            "",
+            "",
+            f"extern \"C\" __global__ __aicore__ void {entry}(" + ", ".join(
+                f"GM_ADDR {tensor_var(r.name)}" for r in (*profile.inputs, *profile.outputs)
+            ) + ", GM_ADDR workspace, GM_ADDR tiling)",
+            "{",
+            f"    REGISTER_TILING_DEFAULT({st});",
+            f"    GET_TILING_DATA_WITH_STRUCT({st}, tiling_data, tiling);",
+            f"    {cls} op;",
+            "    op.Init(" + ", ".join(tensor_var(r.name) for r in (*profile.inputs, *profile.outputs))
+            + ", tiling_data.bigDataNum, tiling_data.smallDataNum, tiling_data.tailBlockNum);",
+            "    op.Process();",
+            "}",
+            "",
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tiling + host text
 # ---------------------------------------------------------------------------
+
+
+def _tiling_fields(profile: FileProfile) -> tuple[str, ...]:
+    """Struct field lines (with 4-space indent), one per uint32_t."""
+    if profile.dtype == "float16":
+        return (
+            "    uint32_t totalLength;",
+            "    uint32_t bigDataNum;",
+            "    uint32_t smallDataNum;",
+            "    uint32_t tailBlockNum;",
+        )
+    return (
+        "    uint32_t totalLength;",
+        "    uint32_t tileNum;",
+    )
+
+
+def _host_tiling_body(profile: FileProfile) -> list[str]:
+    """TilingFunc body lines (4-space indent), dtype-specific tiling math."""
+    st = profile.tiling_struct
+    if profile.dtype == "float16":
+        elems_per_block = 32 // profile.type_len  # 32B block / 2B half
+        return [
+            "    uint32_t totalLength = context->GetInputShape(0)->GetOriginShape().GetShapeSize();",
+            f"    context->SetBlockDim({profile.block_dim});",
+            f"    {st} *tiling = context->GetTilingData<{st}>();",
+            f"    constexpr uint32_t ELEMS_PER_BLOCK = {elems_per_block};  // 32B / sizeof({profile.cpp_dtype})",
+            "    uint32_t totalBlocks = totalLength / ELEMS_PER_BLOCK;",
+            f"    uint32_t perCoreBlocks = totalBlocks / {profile.block_dim};",
+            f"    uint32_t tailBlockNum = totalBlocks % {profile.block_dim};",
+            "    tiling->totalLength = totalLength;",
+            "    tiling->bigDataNum = (perCoreBlocks + (tailBlockNum > 0 ? 1 : 0)) * ELEMS_PER_BLOCK;",
+            "    tiling->smallDataNum = perCoreBlocks * ELEMS_PER_BLOCK;",
+            "    tiling->tailBlockNum = tailBlockNum;",
+            "    return ge::GRAPH_SUCCESS;",
+        ]
+    return [
+        "    uint32_t totalLength = context->GetInputShape(0)->GetOriginShape().GetShapeSize();",
+        f"    context->SetBlockDim({profile.block_dim});",
+        f"    {st} *tiling = context->GetTilingData<{st}>();",
+        "    tiling->totalLength = totalLength;",
+        "    tiling->tileNum = 1;",
+        "    return ge::GRAPH_SUCCESS;",
+    ]
 
 
 def _build_tiling(profile: FileProfile) -> str:
@@ -426,8 +662,7 @@ def _build_tiling(profile: FileProfile) -> str:
             "#include <cstdint>",
             "",
             f"struct {st} {{",
-            "    uint32_t totalLength;",
-            "    uint32_t tileNum;",
+            *_tiling_fields(profile),
             "};",
             f"#endif // {profile.tiling_guard}",
             "",
@@ -467,12 +702,7 @@ def _build_host(profile: FileProfile) -> str:
             "",
             "static ge::graphStatus TilingFunc(gert::TilingContext *context)",
             "{",
-            "    uint32_t totalLength = context->GetInputShape(0)->GetOriginShape().GetShapeSize();",
-            f"    context->SetBlockDim({profile.block_dim});",
-            f"    {st} *tiling = context->GetTilingData<{st}>();",
-            "    tiling->totalLength = totalLength;",
-            "    tiling->tileNum = 1;",
-            "    return ge::GRAPH_SUCCESS;",
+            *_host_tiling_body(profile),
             "}",
             "}  // namespace optiling",
             "",
@@ -561,9 +791,15 @@ def build_three_files(profile: FileProfile, program: ExprProgram) -> dict[str, s
     """
     validate_program(profile, program)
     entry = profile.entry
+    if profile.dtype == "float16":
+        kernel = _build_kernel_fp16(profile, program)
+        tiling = _build_tiling(profile)
+    else:
+        kernel = _build_kernel(profile, program)
+        tiling = _build_tiling(profile)
     return {
-        f"op_kernel/{entry}.cpp": _build_kernel(profile, program),
-        f"op_kernel/{entry}_tiling.h": _build_tiling(profile),
+        f"op_kernel/{entry}.cpp": kernel,
+        f"op_kernel/{entry}_tiling.h": tiling,
         f"op_host/{entry}.cpp": _build_host(profile),
     }
 
@@ -580,7 +816,7 @@ def files_from_spec(spec: OpSpec) -> tuple[FileProfile, ExprProgram, dict[str, s
     :raises OpSpecError: Bilingual error at the first failing stage (missing
         expr, output-name conflict, undeclared tensor reference, ...).
     """
-    profile = profile_from_spec(spec)  # enforces single float ND output
+    profile = profile_from_spec(spec)  # enforces the single uniform-dtype ND output contract
     expr_text = spec.expr.strip()
     if not expr_text:
         raise OpSpecError(t("fillgen.err.expr_missing"), hint=t("fillgen.err.expr_missing.hint"))

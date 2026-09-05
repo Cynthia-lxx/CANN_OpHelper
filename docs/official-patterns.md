@@ -501,11 +501,28 @@ AscendC/aclnn API**——可引用的接口逐条来自官方文档/示例（§4
   空壳内 `TilingDataTemplate` 不再成为约束。
 - **只写三个文件**：`op_kernel/{entry}.cpp`、`op_kernel/{entry}_tiling.h`、`op_host/{entry}.cpp`
   （整文件覆盖，LF/UTF-8）；工程内其余文件逐字节不动（测试锁死）。
-- **验证资产**：写入工程根新增 `verify/` 目录——每个已声明输入一个确定性 float32
-  `input_<TENSOR>.bin`（种子 20260905、8×2048 元素、(-1,1)），`golden.bin` 由**与生成内核同一个
-  已降级语句计划**解释得到（逐语句 float32 舍入），`aclnn_<entry>.cpp` 单算子 host runner，
-  `run_verify.sh`（`bash build.sh` → 装 `custom_opp_*.run` → g++ 编译 runner → 执行 → 比对），
-  `verify_result.py`（纯标准库，`rtol=atol=1e-3`）。
+- **验证资产**：写入工程根新增 `verify/` 目录——每个已声明输入一个确定性
+  `input_<TENSOR>.bin`（种子 20260905、默认 8×2048 元素、(-1,1)，dtype 按 profile：
+  float32 或 float16 `<e` RNE），`golden.bin` 由**与生成内核同一个已降级语句计划**解释得到
+  （逐语句舍入到 profile dtype），`aclnn_<entry>.cpp` 单算子 host runner（dtype 化：
+  `float`/ACL_FLOAT 或 `uint16_t`/ACL_FLOAT16），`run_verify.sh`（`bash build.sh` → 装
+  `custom_opp_*.run` → g++ 编译 runner → 执行 → 比对），`verify_result.py`（纯标准库，
+  dtype 感知解包，`rtol=atol=1e-3`）。元素数优先取 spec shape hint（全张量一致、无动态维），
+  否则回退默认 8×2048。
 - `fill-op <yaml> <工程根> [--dry-run]` 是唯一 CLI 入口；dry-run 校验并预览，不写盘。
+
+## 10. P1 fp16 尾块模式与官方出处（2026-09-05 落地）
+
+- **fp16 DataType**：host 原型注册 `.DataType({ge::DT_FLOAT16})`（§1.3 proto JSON `type` 并行数组与
+  §3.3 OpDef 同构；fp16 kernel 标量用 `half`，`sizeof(half)=2`）。
+- **32B 搬运粒度（尾块前提）**：Vector `DataCopy` 的最小搬运/对齐单位为 32B → fp16 每 32B = 16 元素、
+  float 每 32B = 8 元素；「<32B 残尾」需 `DataCopyPad`，本工具 P1 **不生成**（边界诚实声明见
+  `expr-rules.md` §6）。
+- **大/小核 32B 块切分（官方范式）**：非整除时按 32B 块把多余块分给前 `tailBlockNum` 个核
+  （大核），每核数据量与 GM 偏移保持 32B 对齐——出处为官方 03_intermediate Vector 章
+  （大核个数分配 + `blockLength/tailBlockNum` 上界夹取范式；对应本工具 fp16 tiling 三字段
+  `bigDataNum/smallDataNum/tailBlockNum` 与 kernel 按 `blockIdx < tailBlockNum` 取数）。
+- **fp16 逐语句舍入语义**：元素级 fp16 指令输出按 IEEE binary16 RNE 舍入（`<e` 打包即 RNE），
+  golden 解释器与 kernel 同精度舍入，比对 rtol=atol=1e-3 兜底指令级差异。
 
 

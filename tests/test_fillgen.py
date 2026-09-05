@@ -90,14 +90,53 @@ def test_profile_rejects_no_inputs():
         profile_from_spec(spec)
 
 
-def test_profile_rejects_float16_v1():
+def test_profile_accepts_float16_v1():
+    # P1: uniform float16 is now supported (half kernel + tail tiling).
     spec = OpSpec(
         op_type="TryF16",
         soc_version="ascend910b4",
         inputs=[TensorSpec("A", ["float16"], ["ND"]), TensorSpec("B", ["float16"], ["ND"])],
+        outputs=[TensorSpec("C", ["float16"], ["ND"], shape=[416])],
+    )
+    profile = profile_from_spec(spec)
+    assert profile.dtype == "float16"
+    assert profile.cpp_dtype == "half"
+    assert profile.type_len == 2
+    assert profile.element_count == 416
+
+
+def test_profile_rejects_int_dtypes():
+    # int8/bf16 etc. stay unsupported (element-wise dtype domain is closed).
+    for bad in ("int8", "int32", "bfloat16"):
+        spec = OpSpec(
+            op_type="TryInt",
+            soc_version="ascend910b4",
+            inputs=[TensorSpec("A", [bad], ["ND"])],
+            outputs=[TensorSpec("C", [bad], ["ND"])],
+        )
+        with pytest.raises(OpSpecError, match="不支持的 dtype"):
+            profile_from_spec(spec)
+
+
+def test_profile_shape_conflict():
+    spec = OpSpec(
+        op_type="TryShape",
+        soc_version="ascend910b4",
+        inputs=[TensorSpec("A", ["float16"], ["ND"], shape=[416])],
+        outputs=[TensorSpec("C", ["float16"], ["ND"], shape=[832])],
+    )
+    with pytest.raises(OpSpecError, match="shape"):
+        profile_from_spec(spec)
+
+
+def test_profile_shape_dynamic_rejected():
+    spec = OpSpec(
+        op_type="TryShape",
+        soc_version="ascend910b4",
+        inputs=[TensorSpec("A", ["float16"], ["ND"], shape=[-1])],
         outputs=[TensorSpec("C", ["float16"], ["ND"])],
     )
-    with pytest.raises(OpSpecError, match="v1 仅支持 float"):
+    with pytest.raises(OpSpecError, match="动态维"):
         profile_from_spec(spec)
 
 

@@ -28,6 +28,7 @@ from cann_ophelper.model import OpSpec, TensorSpec
 from cann_ophelper.verifygen import (
     DATA_LENGTH,
     DATA_SEED,
+    _banner,
     verify_files,
     write_verify_assets,
 )
@@ -154,6 +155,28 @@ def test_verify_result_py_is_stdlib_only() -> None:
     assert "import struct" in verify_py
     assert "TEST PASSED" in verify_py
     assert "import numpy" not in verify_py
+
+
+def test_verify_result_py_banner_on_pass() -> None:
+    # PASS verdict prints the ASCII-art banner blocks first, then keeps the plain
+    # "TEST PASSED!" line so the marker stays greppable; generated file must compile.
+    program, profile = _add_program_and_profile()
+    verify_py = verify_files(program, profile)["verify/verify_result.py"].decode("utf-8")
+    compile(verify_py, "<verify_result.py>", "exec")
+    assert verify_py.count("print('''") == 2
+    assert 'print("TEST PASSED!")' in verify_py
+    assert verify_py.index('print("TEST PASSED!")') > verify_py.index("print('''")
+
+
+def test_banner_renders_block_glyphs() -> None:
+    holy = _banner("HOLY SHIT")
+    assert holy.count("\n") == 5  # one 6-row horizontal block banner
+    assert len(holy.splitlines()) == 6
+    glyph_chars = {"█", "╔", "╗", "╚", "╝", "║", "═", " "}
+    assert all(set(line) <= glyph_chars for line in holy.splitlines())
+    assert any("█" in line for line in _banner("TEST PASS").splitlines())
+    with pytest.raises(ValueError):
+        _banner("X")
 
 
 def test_write_verify_assets_creates_bundle_and_is_idempotent(tmp_path) -> None:

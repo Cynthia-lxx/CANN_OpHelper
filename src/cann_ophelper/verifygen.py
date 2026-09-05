@@ -3,12 +3,13 @@
 ``fill-op`` writes the three kernel files and then drops a self-contained
 ``verify/`` asset bundle into the same msopgen project:
 
-- ``input_<TENSOR>.bin``  -- one deterministic float32 file per declared input
-  (fixed random seed, values in (-1, 1), count = 8 * 2048 so the official
-  Add-teaching tiling assumption holds: 8 cores x equal blocks);
+- ``input_<TENSOR>.bin``  -- one deterministic file per declared input, packed
+  in the profile dtype (float32, or float16 via IEEE RNE -- same method as the
+  BMM golden). Element count = profile shape hint when present, else the legacy
+  8 * 2048 (8 cores x equal blocks so the Add-teaching tiling holds);
 - ``golden.bin``          -- expected output computed by *interpreting the same
-  lowered ExprProgram* that generated the kernel (per-statement float32
-  rounding), i.e. kernel and expectation share one semantics;
+  lowered ExprProgram* that generated the kernel (per-statement rounding to the
+  profile dtype), i.e. kernel and expectation share one semantics;
 - ``aclnn_<entry>.cpp``   -- aclnn single-op host runner generated from the
   msopgen op profile; mirrors the official minimal sample API calls
   (DOC ``09_course_practice/src/09.01_testcase/testcase_6/aclnn_test.cpp``);
@@ -40,15 +41,24 @@ __all__ = [
     "write_verify_assets",
 ]
 
-#: Deterministic data seed and element count (8 cores x 2048 elements each).
+#: Deterministic data seed. Default element count (8 cores x 2048 elements
+#: each); overridden by the profile's shape hint when the spec declares one.
 DATA_SEED = 20260905
 DATA_LENGTH = 8 * 2048
+
+#: dtype -> (host C++ scalar, aclDataType token, struct pack/unpack char,
+#:   zero literal). Central table; keep in sync with fillgen dtype support.
+_RUNNER_TYPE = {"float": "float", "float16": "uint16_t"}
+_ACL_DTYPE = {"float": "ACL_FLOAT", "float16": "ACL_FLOAT16"}
+_PACK_CHAR = {"float": "f", "float16": "e"}
+_ZERO_LITERAL = {"float": "0.0f", "float16": "0"}
 
 #: Official compare tolerance (verify_result.py mirrors np.isclose(rtol/atol=1e-3)).
 _ATOL = 1e-3
 _RTOL = 1e-3
 
 _FLOAT32 = struct.Struct("<f")
+_FLOAT16 = struct.Struct("<e")  # IEEE-754 binary16, round-half-to-even (RNE)
 
 
 def _f32(value: float) -> float:
@@ -56,17 +66,39 @@ def _f32(value: float) -> float:
     return _FLOAT32.unpack(_FLOAT32.pack(float(value)))[0]
 
 
+def _f16(value: float) -> float:
+    """Round a Python float to IEEE-754 float16 (RNE), as half arithmetic does."""
+    return _FLOAT16.unpack(_FLOAT16.pack(float(value)))[0]
+
+
+def _round_to(value: float, dtype: str) -> float:
+    return _f16(value) if dtype == "float16" else _f32(value)
+
+
+def _pack_values(values: Sequence[float], dtype: str) -> bytes:
+    if dtype == "float16":
+        return b"".join(_FLOAT16.pack(value) for value in values)
+    return b"".join(_FLOAT32.pack(value) for value in values)
+
+
+def _unpack_values(raw: bytes, dtype: str) -> list[float]:
+    return list(struct.unpack(f"<{len(raw) // (2 if dtype == 'float16' else 4)}{_PACK_CHAR[dtype]}", raw))
+
+
 def _pascal_var(name: str) -> str:
     """Deterministic C++ identifier suffix for a tensor name (a -> A)."""
     return name[:1].upper() + name[1:]
 
 
-def _interp_program(program, tensors: Mapping[str, Sequence[float]], out_name: str) -> list[float]:
+def _interp_program(
+    program, tensors: Mapping[str, Sequence[float]], out_name: str, length: int, dtype: str
+) -> list[float]:
     """Interpret the lowered statement plan over float vectors.
 
     Executes the exact same ordered statement sequence the kernel runs, one
-    element at a time, rounding every statement result to float32 -- the same
-    semantics the NPU vector ops have at the official comparison tolerance.
+    element at a time, rounding every statement result to the profile dtype
+    (float32 or float16) -- the same semantics the NPU vector ops have at the
+    official comparison tolerance.
     """
     # Valid symbol buffers = declared inputs plus the output tensor: the
     # lowered plan may write directly into the output symbol (e.g. constants
@@ -74,8 +106,8 @@ def _interp_program(program, tensors: Mapping[str, Sequence[float]], out_name: s
     names = set(tensors) | {out_name}
     slots: dict[str, list[float]] = {name: list(values) for name, values in tensors.items()}
     if out_name not in slots:
-        slots[out_name] = [0.0] * DATA_LENGTH
-    scratch: list[list[float]] = [[0.0] * DATA_LENGTH for _ in range(program.scratch_count)]
+        slots[out_name] = [0.0] * length
+    scratch: list[list[float]] = [[0.0] * length for _ in range(program.scratch_count)]
 
     def buf(slot: str) -> list[float]:
         if slot in names:
@@ -85,12 +117,12 @@ def _interp_program(program, tensors: Mapping[str, Sequence[float]], out_name: s
     for stmt in program.statements:
         dst = buf(stmt.dst)
         if stmt.op == "dup":
-            scalar = _f32(stmt.scalar if stmt.scalar is not None else 0.0)
-            for i in range(DATA_LENGTH):
+            scalar = _round_to(stmt.scalar if stmt.scalar is not None else 0.0, dtype)
+            for i in range(length):
                 dst[i] = scalar
             continue
         srcs = [buf(s) for s in stmt.srcs]
-        for i in range(DATA_LENGTH):
+        for i in range(length):
             if stmt.op == "neg":
                 value = -srcs[0][i]
             elif stmt.op == "add":
@@ -109,21 +141,17 @@ def _interp_program(program, tensors: Mapping[str, Sequence[float]], out_name: s
                 value = abs(srcs[0][i])
             else:  # pragma: no cover - guarded by fillgen.validate_program rules
                 raise OpSpecError(t("verifygen.err.op_unsupported", op=stmt.op))
-            dst[i] = _f32(value)
+            dst[i] = _round_to(value, dtype)
     return slots[out_name]
 
 
-def _binary_data(values: Sequence[float]) -> bytes:
-    return b"".join(_FLOAT32.pack(value) for value in values)
-
-
-def _inputs_binary(refs: Sequence[TensorRef]) -> dict[str, bytes]:
+def _inputs_binary(refs: Sequence[TensorRef], length: int, dtype: str) -> dict[str, bytes]:
     """Deterministic input data files for every declared input tensor."""
     rng = random.Random(DATA_SEED)
     out: dict[str, bytes] = {}
     for ref in refs:
-        values = [_f32(rng.uniform(-1.0, 1.0)) for _ in range(DATA_LENGTH)]
-        out[f"verify/input_{ref.name}.bin"] = _binary_data(values)
+        values = [_round_to(rng.uniform(-1.0, 1.0), dtype) for _ in range(length)]
+        out[f"verify/input_{ref.name}.bin"] = _pack_values(values, dtype)
     return out
 
 
@@ -139,7 +167,11 @@ def _runner_source(profile: FileProfile) -> str:
     output = profile.outputs[0]
     in_c = [_pascal_var(ref.name) for ref in inputs]
     out_c = _pascal_var(output.name)
-    n = DATA_LENGTH
+    dtype = profile.dtype
+    host_type = _RUNNER_TYPE[dtype]
+    acl_dtype = _ACL_DTYPE[dtype]
+    zero = _ZERO_LITERAL[dtype]
+    n = profile.element_count or DATA_LENGTH
 
     lines: list[str] = []
 
@@ -277,10 +309,10 @@ def _runner_source(profile: FileProfile) -> str:
         f"    const int64_t elementCount = {n};",
         f"    const std::vector<int64_t> tensorShape = {{{n}}};",
         "",
-        f"    std::vector<float> output{out_c}HostData(elementCount, 0.0f);",
+        f"    std::vector<{host_type}> output{out_c}HostData(elementCount, {zero});",
     )
     for c in in_c:
-        add(f"    std::vector<float> input{c}HostData(elementCount);")
+        add(f"    std::vector<{host_type}> input{c}HostData(elementCount);")
     for c in in_c:
         add(
             f'    CHECK_RET(ReadBinFile(dataDir + "/input_{_input_file_name(inputs, c)}.bin", input{c}HostData),',
@@ -303,12 +335,12 @@ def _runner_source(profile: FileProfile) -> str:
 
     for ref, c in zip(inputs, in_c):
         add(
-            f"    ret = CreateAclTensor(input{c}HostData, tensorShape, &input{c}DeviceAddr, ACL_FLOAT, &input{c});",
+            f"    ret = CreateAclTensor(input{c}HostData, tensorShape, &input{c}DeviceAddr, {acl_dtype}, &input{c});",
             f'    CHECK_RET(ret == SUCCESS, LOG_PRINT("create input tensor {ref.name} failed. ERROR: %d\\n", ret);',
             "              cleanup(); return FAILED);",
         )
     add(
-        f"    ret = CreateAclTensor(output{out_c}HostData, tensorShape, &output{out_c}DeviceAddr, ACL_FLOAT, &output{out_c});",
+        f"    ret = CreateAclTensor(output{out_c}HostData, tensorShape, &output{out_c}DeviceAddr, {acl_dtype}, &output{out_c});",
         '    CHECK_RET(ret == SUCCESS, LOG_PRINT("create output tensor failed. ERROR: %d\\n", ret);',
         "              cleanup(); return FAILED);",
         "",
@@ -332,7 +364,7 @@ def _runner_source(profile: FileProfile) -> str:
         '    CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclrtSynchronizeStream failed. ERROR: %d\\n", ret);',
         "              cleanup(); return FAILED);",
         "",
-        f"    std::vector<float> resultData(elementCount);",
+        f"    std::vector<{host_type}> resultData(elementCount);",
         f"    ret = aclrtMemcpy(resultData.data(), resultData.size() * sizeof(resultData[0]), output{out_c}DeviceAddr,",
         "                      resultData.size() * sizeof(resultData[0]), ACL_MEMCPY_DEVICE_TO_HOST);",
         '    CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("copy result from device to host failed. ERROR: %d\\n", ret);',
@@ -358,7 +390,9 @@ def _input_file_name(inputs: Sequence[TensorRef], c: str) -> str:
     raise OpSpecError(t("verifygen.err.internal", tag=c))  # pragma: no cover
 
 
-def _verify_py_source() -> str:
+def _verify_py_source(dtype: str) -> str:
+    fmt_char = _PACK_CHAR[dtype]
+    width = 2 if dtype == "float16" else 4
     return """\
 #!/usr/bin/env python3
 # Generated by CANN_OpHelper verifygen -- pure-stdlib numeric comparator.
@@ -373,12 +407,12 @@ ATOL = 1e-3
 RTOL = 1e-3
 
 
-def load_f32(path):
+def load_values(path):
     raw = Path(path).read_bytes()
-    if len(raw) % 4 != 0:
+    if len(raw) % __WIDTH__ != 0:
         raise SystemExit("FAILED! bad file size: %s (%d bytes)" % (path, len(raw)))
-    count = len(raw) // 4
-    return list(struct.unpack("<%df" % count, raw))
+    count = len(raw) // __WIDTH__
+    return list(struct.unpack("<%d__FMT__" % count, raw))
 
 
 def close(a, b):
@@ -388,8 +422,8 @@ def close(a, b):
 
 
 def verify_result():
-    golden = load_f32("golden.bin")
-    output = load_f32("output.bin")
+    golden = load_values("golden.bin")
+    output = load_values("output.bin")
     if len(golden) != len(output):
         print("FAILED! size mismatch, output=%d, golden=%d" % (len(output), len(golden)))
         return False
@@ -409,7 +443,7 @@ def verify_result():
 if __name__ == "__main__":
     os.chdir(Path(__file__).resolve().parent)
     sys.exit(0 if verify_result() else 1)
-"""
+""".replace("__WIDTH__", str(width)).replace("__FMT__", fmt_char)
 
 
 def _run_sh_source(profile: FileProfile) -> str:
@@ -471,19 +505,21 @@ def verify_files(program, profile: FileProfile) -> dict[str, bytes]:
     :returns: ``{relative_path: bytes}``; binary files are float32 LE, text
         files are LF-encoded UTF-8 so the bundle can be uploaded as-is.
     """
-    files = _inputs_binary(profile.inputs)
+    dtype = profile.dtype
+    length = profile.element_count or DATA_LENGTH
+    files = _inputs_binary(profile.inputs, length, dtype)
 
     # Expected output: interpret the *same* lowered program the kernel runs.
     tensors: dict[str, list[float]] = {}
     for key, raw in files.items():  # key == "verify/input_<NAME>.bin"
         name = key[len("verify/input_"):-len(".bin")]
-        tensors[name] = list(struct.unpack(f"<{DATA_LENGTH}f", raw))
-    golden = _interp_program(program, tensors, profile.outputs[0].name)
+        tensors[name] = _unpack_values(raw, dtype)
+    golden = _interp_program(program, tensors, profile.outputs[0].name, length, dtype)
 
-    files["verify/golden.bin"] = _binary_data(golden)
+    files["verify/golden.bin"] = _pack_values(golden, dtype)
     files[f"verify/aclnn_{profile.entry}.cpp"] = _runner_source(profile).encode("utf-8")
     files["verify/run_verify.sh"] = _run_sh_source(profile).encode("utf-8")
-    files["verify/verify_result.py"] = _verify_py_source().encode("utf-8")
+    files["verify/verify_result.py"] = _verify_py_source(dtype).encode("utf-8")
     return files
 
 

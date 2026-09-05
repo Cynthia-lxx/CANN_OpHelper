@@ -98,5 +98,17 @@ python3 <run>/verify_result.py
 ## 5. v1 边界（诚实声明）
 
 - 符号集：`+ - * /` 二元、一元 `-`、`sigmoid/exp/abs`；常量（含 `\frac{c}{x}` 形态）；括号；LaTeX 子集。幂/对数/relu/min/max/多输出/广播/规约不做 v1（架构留扩展点）。
-- dtype：按 spec 声明（float16/float 其一或并行列表同构），全部张量要求同一 dtype 列表；生成代码与官方教学同为模板类 + `DTYPE_X` 宏形态。
-- 全部输入输出 `ND`、同 shape、单输出；总元素可被核数整除（官方 Add 教学口径）。
+- dtype：按 spec 声明，全部张量要求同一 dtype（float 或 float16），ND、单输出、同 shape。
+- **整除声明仅约束 float 默认路径**（官方 Add 教学口径）；float16 路径使用 32B 块尾块 tiling，不再要求总元素被核数整除——见 §6。
+
+## 6. P1：float16 与 32B 块尾块契约（fillgen B 系统，2026-09-05 落地）
+
+- **dtype 域**：`{float, float16}` 单一且跨张量一致；float→kernel `float`/host `DT_FLOAT`，float16→kernel `half`/host `DT_FLOAT16`；int8/int32/bf16 拒（i18n `fillgen.err.*`）。常量折叠 cast 随 dtype（`(half)2` / `(float)2`）。
+- **shape hint（可选）**：`TensorSpec.shape` 只驱动 verify 元素数 = 全部显式 shape 的乘积；所有显式 shape 必须一致（否则 `shape_conflict`）、不得含动态维 `-1`（否则 `shape_dynamic`）；无 hint 时验证回退默认 8×2048。msopgen 命令与原型 JSON 忽略 shape（官方 proto 本就不含 shape）。
+- **float16 tail tiling**（生成的三件套均为该结构）：
+  - TilingData：`totalLength / bigDataNum / smallDataNum / tailBlockNum`（uint32×4）。
+  - host：`totalBlocks=totalLength/16`；`perCoreBlocks=totalBlocks/8`；`tailBlockNum=totalBlocks%8`；`bigDataNum=(perCoreBlocks+(tailBlockNum>0?1:0))*16`；`smallDataNum=perCoreBlocks*16`。
+  - kernel：`blockIdx < tailBlockNum` 为大核（`dataNum=bigDataNum`），GM 偏移大核 `blockIdx*bigDataNum`、小核 `tailBlockNum*bigDataNum+(blockIdx-tailBlockNum)*smallDataNum`；每核 32B 对齐；`Process` 单趟 CopyIn→Compute→CopyOut（无核内二次切片）。
+- **边界（诚实声明）**：尾块粒度 = 32B 块（fp16 为 16 元素/块）；生成器假定总元素是 32B 块整数倍——DataCopy 最小搬运粒度 32B，真正的「<32B 残尾」需要 `DataCopyPad`，P1 不生成，留待后续阶段。用例 shape hint 应满足该前提（如 416=26×16）。
+- **fp16 验证**：输入/golden 以 `struct '<e'`（RNE）打包与舍入；golden 解释器每语句 round 到 fp16（与 kernel 指令同精度）；runner host 类型 `uint16_t` + `ACL_FLOAT16`；`verify_result.py` 以 `<e` 解包，判据沿用 rtol=atol=1e-3。
+- **回归防线**：float 默认路径文本与旧版逐字节一致（229→232 既有用例全绿）；新能力仅由 dtype=float16 或非整除 32B 块 shape 触发。

@@ -155,6 +155,7 @@ def test_simple_add_files_shape():
     # kernel text
     kernel = files["op_kernel/asc_try.cpp"]
     assert "class KernelAscTry {" in kernel
+    assert "AscendC::TPipe pipe;" in kernel  # regression: pipe must be a member
     assert "AscendC::Add(cLocal, aLocal, bLocal, this->tileLength);" in kernel
     assert "REGISTER_TILING_DEFAULT(AscTryTilingData);" in kernel
     assert "void asc_try(GM_ADDR a, GM_ADDR b, GM_ADDR c, GM_ADDR workspace, GM_ADDR tiling)" in kernel

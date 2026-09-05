@@ -205,6 +205,7 @@ def test_apply_writes_exactly_three_files(tmp_path):
     kernel = after["op_kernel/asc_try.cpp"].decode("utf-8")
     assert kernel != before["op_kernel/asc_try.cpp"].decode("utf-8")
     assert "class KernelAscTry {" in kernel
+    assert "AscendC::TPipe pipe;" in kernel  # regression: pipe must be a member
     assert "AscendC::Add(cLocal, aLocal, bLocal, this->tileLength);" in kernel
     assert "REGISTER_TILING_DEFAULT(AscTryTilingData);" in kernel
     assert "void asc_try(GM_ADDR a, GM_ADDR b, GM_ADDR c, GM_ADDR workspace, GM_ADDR tiling)" in kernel

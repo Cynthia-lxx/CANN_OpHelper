@@ -383,6 +383,7 @@ def _build_kernel(profile: FileProfile, program: ExprProgram) -> str:
             "    }",
             "",
             "private:",
+            "    AscendC::TPipe pipe;",
             *queues,
             *gms,
             *members,

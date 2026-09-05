@@ -8,12 +8,17 @@ Three commands expose the official msopgen workflow (docs/official-patterns.md):
 - ``gen-msopgen``: validate an operator spec YAML, preview its metadata and
   print the ready-to-run ``msopgen`` command together with the cloud execution
   steps. With ``--proto-out`` it additionally exports the official prototype
-  JSON (derived mechanically from the spec) to a local file. It performs no
-  other filesystem writes.
+  JSON (derived mechanically from the spec) to a local file, and the msopgen
+  command then references that file via ``-i``. Without ``--proto``/``--proto-out``
+  it prints a reminder that the ``-i`` default is only the add demo sample, not
+  the current operator's prototype. It performs no other filesystem writes.
 - ``render``: render the ``op_kernel``/``op_host`` artifacts from a spec YAML.
   With ``--out`` the three files are written into that directory -- the local
   copy of an msopgen project -- overwriting what is already there; without
   ``--out`` (or with ``--dry-run``) it only previews file names and sizes.
+- ``quickstart``: print a copy-paste path from zero to a cloud-ready CANN
+  project (wizard -> YAML -> prototype JSON -> cloud msopgen -> render); it
+  performs no writes.
 
 Language policy: static ``--help`` text stays in English, while every runtime
 message is resolved from ``cann_ophelper.i18n`` at print time, so ``--lang``
@@ -27,6 +32,7 @@ from typing import Dict, NoReturn, Optional
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.markup import escape as esc
 from rich.panel import Panel
 from rich.table import Table
@@ -83,6 +89,15 @@ def _fail(message: str) -> NoReturn:
     """Print a red error line (message already localized) and exit with code 1."""
     _c().print(f"[bold red]{t('cli.error.title')}{esc(message)}[/]")
     raise typer.Exit(code=1)
+
+
+def _print_note(console: Console, first: str, second: str = "") -> None:
+    """Print a yellow guidance panel (labels escaped, lines kept short)."""
+    lines = [f"[bold yellow]{esc(first)}[/]"]
+    if second:
+        lines.append(esc(second))
+    console.print()
+    console.print(Panel("\n".join(lines), border_style="yellow", expand=False))
 
 
 @app.callback()
@@ -173,10 +188,12 @@ def gen_msopgen(
         ...,
         help="Operator spec YAML file (see examples/add.yaml).",
     ),
-    proto: str = typer.Option(
-        DEFAULT_PROTO,
+    proto: Optional[str] = typer.Option(
+        None,
         "--proto",
-        help="Operator prototype JSON path (cloud-side, msopgen '-i').",
+        help="Operator prototype JSON path (cloud-side, msopgen '-i'). When "
+        "--proto-out is given, its file name is used by default; otherwise the "
+        "add demo sample is referenced (see warning).",
     ),
     out: str = typer.Option(
         DEFAULT_OUT,
@@ -187,14 +204,59 @@ def gen_msopgen(
         None,
         "--proto-out",
         help="Also write the official msopgen prototype JSON to this local path "
-        "(derived mechanically from the spec; upload it to the cloud and point "
-        "msopgen '-i' at it).",
+        "(derived mechanically from the spec) and use that file as the msopgen "
+        "'-i' input; upload it to the cloud next to where msopgen runs.",
     ),
 ) -> None:
-    """Show operator metadata and the ready-to-run msopgen command."""
+    """Show operator metadata and the ready-to-run msopgen command.
+
+    Examples (typical end-to-end flows):
+
+    # 1) interactive wizard -> spec YAML -> prototype JSON -> msopgen command
+    python -m cann_ophelper new-op                       # answers become myop.yaml
+    python -m cann_ophelper gen-msopgen myop.yaml --proto-out myop.json
+    #    upload myop.json to the cloud, then run the printed msopgen command there
+
+    # 2) start from the built-in 'add' preset, non-interactively
+    python -m cann_ophelper new-op --from add --yes --out add.yaml
+    python -m cann_ophelper gen-msopgen add.yaml --proto add.json --out out/Add
+
+    # 3) point at a prototype you already prepared on the cloud
+    python -m cann_ophelper gen-msopgen add.yaml --proto cloud/path/add.json
+    """
     console = _c()
     spec = _load_spec(yaml_path)
     _print_overview(console, spec)
+
+    # Resolve the prototype JSON shown in the msopgen command (-i). Two main
+    # flows, mirroring the decision table tested in tests/test_cli.py:
+    # - --proto-out given (the common "export my own prototype" flow): -i
+    #   references that exported file automatically.
+    # - only --proto given: it is used as-is.
+    # - neither given: fall back to the built-in add demo sample and warn that
+    #   it is NOT the prototype of the current operator.
+    if proto_out is not None:
+        if proto is None:
+            proto = Path(proto_out).name
+            _print_note(
+                console,
+                t("cli.proto_missing.hint"),
+                t("cli.proto_out.suggest"),
+            )
+        elif Path(proto_out).name != proto:
+            _print_note(
+                console,
+                t("cli.proto_mismatch.hint", exported=Path(proto_out).name),
+                t("cli.proto_mismatch.action", proto=proto),
+            )
+    elif proto is None:
+        proto = DEFAULT_PROTO
+        _print_note(
+            console,
+            t("cli.proto_demo.hint", demo=DEFAULT_PROTO),
+            t("cli.proto_demo.action"),
+        )
+
     try:
         command = build_msopgen_command(spec, proto, out)
     except OpSpecError as exc:
@@ -214,7 +276,6 @@ def gen_msopgen(
         console.print()
         console.print(t("cli.proto_out.written"))
         console.print(esc(str(proto_out)))
-        console.print(t("cli.proto_out.suggest"))
 
 
 def _preview_table(console: Console, files: Dict[str, str]) -> None:
@@ -358,3 +419,18 @@ def new_op(
     console.print()
     console.print(f"[bold green]{esc(t('cli.new_op.written', path=str(target)))}[/]")
     console.print(t("cli.new_op.suggest", path=esc(str(target))))
+
+
+@app.command()
+def quickstart() -> None:
+    """Show a copy-paste path from zero to a cloud-ready CANN project."""
+    console = _c()
+    py = "python -m cann_ophelper"
+    console.print()
+    console.print(
+        Panel.fit(
+            Markdown(t("cli.quickstart.body").replace("{py}", py)),
+            title=t("cli.quickstart.title"),
+            border_style="cyan",
+        )
+    )

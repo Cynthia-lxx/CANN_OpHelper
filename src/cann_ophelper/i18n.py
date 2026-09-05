@@ -137,9 +137,17 @@ _ZH: Dict[str, str] = {
     "cli.new_op.cancelled": "已取消，未写盘。",
     "cli.new_op.written": "已写入算子描述：{path}",
     "cli.new_op.suggest": "下一步：cann-ophelper gen-msopgen {path} 预览 msopgen 命令；加 --proto-out 可直接导出原型 JSON。",
+    # -- quickstart (cli) --
+    "cli.quickstart.title": "从零到云端 CANN 工程（快速上手）",
+    "cli.quickstart.body": "以下命令覆盖「需求 → YAML → 原型 JSON → 云端 msopgen 工程 → 本地渲染」全流程。\n将 {py} 替换为你的 Python 入口（如 penv 激活后直接 `cann-ophelper`）。\n\n**① 收集算子需求，生成 spec YAML**\n\n```text\n{py} new-op                        # 交互逐问 → 得到 myop.yaml\n{py} new-op --from add --yes --out add.yaml   # 或用内置 Add 预设\n```\n\n**② 导出原型 JSON，并得到 msopgen 命令**\n\n```text\n{py} gen-msopgen myop.yaml --proto-out myop.json\n```\n\n命令中的 `-i` 已自动指向 myop.json。\n\n**③ 在云端执行 msopgen**\n\n把 myop.json 与生成的工程上传到云端 CANN 环境，复制 ② 打印的命令执行：\n\n```text\nmsopgen gen -i myop.json -c ai_core-ascend910b1 -lan cpp -out out/MyOp\n```\n\n**④ 本地渲染填充，回传编译验证**\n\n```text\n{py} render myop.yaml --out <云端拷回的工程目录>\n```\n\n更多细节见 `gen-msopgen --help` 中的示例与 README。",
     # -- proto-out export (cli) --
     "cli.proto_out.written": "原型 JSON 已写入：",
     "cli.proto_out.suggest": "将该文件上传到云端后，可作为 msopgen 命令中 -i 指向的原型 JSON。",
+    "cli.proto_demo.hint": "未指定 --proto/--proto-out：命令中的 -i 指向的是内置 Add 演示样例 {demo}，并非当前算子的原型 JSON。",
+    "cli.proto_demo.action": "请用 --proto-out 从当前 spec 导出原型 JSON，或用 --proto 指向你已有的原型文件；仅作演示时可忽略本提示。",
+    "cli.proto_missing.hint": "已自动让命令中的 -i 指向 --proto-out 导出的文件。",
+    "cli.proto_mismatch.hint": "--proto 与 --proto-out 不一致：导出文件名为 {exported}，但命令 -i 仍指向 --proto 指定的文件。",
+    "cli.proto_mismatch.action": "若要在云端使用刚导出的原型，请改传 --proto {proto} 或去掉 --proto。",
     # -- new-op wizard (wizard) --
     "wizard.prompt.op_type": "算子类型名（PascalCase，如 AddCustomTemplate）",
     "wizard.prompt.soc": "SoC 基础版本（如 ascend910b1；msopgen -c 会拼为 ai_core-ascend910b1）",
@@ -258,9 +266,17 @@ _EN: Dict[str, str] = {
     "cli.new_op.cancelled": "Cancelled; nothing written.",
     "cli.new_op.written": "Operator spec written to: {path}",
     "cli.new_op.suggest": "Next: run `cann-ophelper gen-msopgen {path}` to preview the msopgen command; add --proto-out to also export the prototype JSON.",
+    # -- quickstart (cli) --
+    "cli.quickstart.title": "From zero to a cloud-ready CANN project",
+    "cli.quickstart.body": "These commands cover the whole flow: requirement -> YAML -> prototype JSON -> cloud msopgen project -> local render.\nReplace {py} with your Python entry (e.g. `cann-ophelper` after activating penv).\n\n**1. Collect the operator spec as YAML**\n\n```text\n{py} new-op                        # interactive -> writes myop.yaml\n{py} new-op --from add --yes --out add.yaml   # or use the built-in add preset\n```\n\n**2. Export the prototype JSON and get the msopgen command**\n\n```text\n{py} gen-msopgen myop.yaml --proto-out myop.json\n```\n\nThe `-i` in the printed command already points at myop.json.\n\n**3. Run msopgen on the cloud**\n\nUpload myop.json (and later the project) to a cloud CANN environment, then run the command printed in step 2, e.g.:\n\n```text\nmsopgen gen -i myop.json -c ai_core-ascend910b1 -lan cpp -out out/MyOp\n```\n\n**4. Render locally, then compile on the cloud**\n\n```text\n{py} render myop.yaml --out <cloud project directory copied back>\n```\n\nSee the examples in `gen-msopgen --help` and the README for more.",
     # -- proto-out export (cli) --
     "cli.proto_out.written": "Prototype JSON written to:",
     "cli.proto_out.suggest": "Upload this file to the cloud, then point msopgen '-i' at it.",
+    "cli.proto_demo.hint": "No --proto/--proto-out given: the '-i' in the command references the built-in add demo sample {demo}, which is NOT the prototype of the current operator.",
+    "cli.proto_demo.action": "Export the prototype for this spec with --proto-out, or point --proto at a prototype file you already have; ignore this note only for a demo run.",
+    "cli.proto_missing.hint": "Pointed the command '-i' at the file exported via --proto-out automatically.",
+    "cli.proto_mismatch.hint": "--proto differs from --proto-out: the exported file is named {exported}, but the command '-i' still uses the file given by --proto.",
+    "cli.proto_mismatch.action": "To use the freshly exported prototype on the cloud, pass --proto {proto} or drop --proto.",
     # -- new-op wizard (wizard) --
     "wizard.prompt.op_type": "Operator type (PascalCase, e.g. AddCustomTemplate)",
     "wizard.prompt.soc": "Base SoC version (e.g. ascend910b1; msopgen -c becomes ai_core-ascend910b1)",

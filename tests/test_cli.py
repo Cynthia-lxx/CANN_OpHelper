@@ -48,7 +48,26 @@ def test_help_lists_commands() -> None:
     assert "gen-msopgen" in result.output
     assert "new-op" in result.output
     assert "render" in result.output
+    assert "quickstart" in result.output
     assert "--lang" in result.output
+
+
+def test_quickstart_zh_lists_whole_flow() -> None:
+    result = invoke("quickstart")
+    assert result.exit_code == 0, result.output
+    text = result.output
+    assert "从零到云端 CANN 工程" in text
+    assert "new-op --from add --yes --out add.yaml" in text
+    assert "gen-msopgen myop.yaml --proto-out myop.json" in text
+    assert "render myop.yaml --out" in text
+
+
+def test_quickstart_english() -> None:
+    result = invoke("--lang", "en", "quickstart")
+    assert result.exit_code == 0, result.output
+    text = result.output
+    assert "From zero to a cloud-ready CANN project" in text
+    assert "gen-msopgen myop.yaml --proto-out myop.json" in text
 
 
 def test_new_op_help_shows_flags() -> None:
@@ -279,3 +298,56 @@ def test_gen_msopgen_without_proto_out_writes_nothing(tmp_path: Path) -> None:
     result = invoke("gen-msopgen", str(EXAMPLES_YAML))
     assert result.exit_code == 0
     assert "原型 JSON 已写入" not in result.output
+
+
+def test_gen_msopgen_without_proto_warns_demo_sample() -> None:
+    """Neither --proto nor --proto-out: warn that -i points at the add demo
+    sample, not at the current operator's prototype."""
+    result = invoke("gen-msopgen", str(EXAMPLES_YAML))
+    assert result.exit_code == 0, result.output
+    text = result.output
+    assert "内置 Add 演示样例" in text
+    assert DEFAULT_PROTO in text
+    assert "--proto-out" in text
+    # the command still references the demo default, clearly flagged
+    assert f"-i {DEFAULT_PROTO}" in text
+
+
+def test_gen_msopgen_proto_out_repoints_proto_to_export(tmp_path: Path) -> None:
+    """--proto-out alone: the msopgen '-i' automatically points at the exported
+    file name, so the user never sees a stale demo JSON path."""
+    target = tmp_path / "nested" / "sub" / "asc_try.json"
+    result = invoke("gen-msopgen", str(EXAMPLES_YAML), "--proto-out", str(target))
+    assert result.exit_code == 0, result.output
+    text = result.output
+    assert "-i asc_try.json" in text
+    assert "已自动让命令中的 -i" in text
+    assert DEFAULT_PROTO not in text
+    assert target.is_file()
+
+
+def test_gen_msopgen_proto_out_with_explicit_proto_keeps_proto(tmp_path: Path) -> None:
+    """Both --proto-out and a *different* explicit --proto: the command keeps
+    the explicit -i value and warns about the mismatch."""
+    target = tmp_path / "exported.json"
+    result = invoke(
+        "gen-msopgen", str(EXAMPLES_YAML),
+        "--proto", "cloud/proto.json", "--proto-out", str(target),
+    )
+    assert result.exit_code == 0, result.output
+    text = result.output
+    assert "-i cloud/proto.json" in text
+    assert "不一致" in text
+    assert target.is_file()
+
+
+def test_gen_msopgen_proto_out_english(tmp_path: Path) -> None:
+    target = tmp_path / "asc_try.json"
+    result = invoke(
+        "--lang", "en", "gen-msopgen", str(EXAMPLES_YAML),
+        "--proto-out", str(target),
+    )
+    assert result.exit_code == 0, result.output
+    text = result.output
+    assert "-i asc_try.json" in text
+    assert "pointed the command '-i' at the file exported" in text.lower()

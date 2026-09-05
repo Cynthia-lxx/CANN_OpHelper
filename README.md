@@ -48,13 +48,30 @@ p:\Dev\CANN_Learning_Refs\penv\Scripts\Activate.ps1
 
 ## 使用示例
 
+CLI 提供两个子命令（`cann-ophelper` 已注册为 console script，激活 `penv` 后可直呼）：
+
+| 子命令 | 作用 |
+| --- | --- |
+| `gen-msopgen <yaml>` | 校验并预览算子元信息，拼装一条完整的 `msopgen` 命令与云端执行说明（无副作用）。省略 `--proto`/`--out` 时沿用官方示例的相对路径默认值。 |
+| `render <yaml> --out <目录>` | 按模板渲染 `op_kernel`/`op_host` 三产物并写入 `--out` 目录（覆盖该目录下已有同名文件，常用于覆盖云端拷回的 msopgen 工程）；省略 `--out` 或加 `--dry-run` 时仅预览不落盘。 |
+
 ```powershell
-# venv python 位置
+# 帮助与版本
 p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper --help
 
-# 用 YAML 描述生成 msopgen 命令
+# 用 YAML 描述生成 msopgen 命令（默认 zh 输出；--lang en 切换英文）
 p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper gen-msopgen examples\add.yaml
+p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper --lang en gen-msopgen examples\add.yaml
+
+# 渲染三产物：预览（不写盘）或写入指定工程目录（覆盖 op_host/op_kernel）
+p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper render examples\add.yaml
+p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper render examples\add.yaml --out out\AddCustomTemplate
 ```
+
+工作流第 2~4 步的操作入口：
+
+1. `gen-msopgen` 展示命令与云端步骤 → 复制命令到云端 CANN Lab 执行，获得初始工程并拷回本地。
+2. `render ... --out <本地工程目录>` 将三产物写回该工程，随后整体上传云端编译验证。
 
 ## 目录结构
 

@@ -94,6 +94,15 @@ msopgen gen -i Sources/03.02/add_custom.json -c ai_core-ascend910b1 -lan cpp -ou
 - `attrs` 暂不导出：官方样例未见 `attr_desc` 的确定性写法，宁可报错（`proto.attr_unsupported`）也不臆造格式。
 - 键序与缩进：顶层数组，`op` → `input_desc` / `output_desc`；entry 键序 `name → param_type → format → type`；4 空格缩进（`json.dumps`）。msopgen 只解析 JSON 结构，文本布局无约束。
 - 入口：CLI 为 `gen-msopgen <yaml> --proto-out <json>`；Python 为 `proto.dump_prototype_json(spec, path)` / `prototype_json_text(spec)`。
+- `gen-msopgen` 的 `-i`（`--proto`）解析决策表（`tests/test_cli.py` 锁定）：
+
+| 用户输入 | 命令中 `-i` 取值 | 提示 |
+| --- | --- | --- |
+| 仅 `--proto-out <本地路径>` | 导出文件的**文件名**（自动跟随） | 提示上传该文件到云端执行目录 |
+| 同时给 `--proto` 与 `--proto-out` 且文件名不同 | `--proto` 指定的值 | 警告两者不一致，提示以 `--proto` 为准或去掉它 |
+| 两者都省略 | 官方示例默认 `Sources/03.02/add_custom.json` | **警告**该路径是内置 Add 演示样例，非当前算子原型，引导用 `--proto-out`/`--proto` |
+
+  此设计的动机：`msopgen` 命令在云端执行，`-i` 是云端路径，本地无法校验存在性；默认值仅为演示沿用官方教程，自定义算子必须显式导出或指定原型文件。
 - golden 对齐：`tests/test_proto.py` 以官方 `add_custom.json` 做结构等价断言，防止导出漂移。
 
 ### 1.4 msopgen 生成的工程目录结构

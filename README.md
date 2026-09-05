@@ -48,6 +48,16 @@ p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m pip install -e ".[dev]"
 p:\Dev\CANN_Learning_Refs\penv\Scripts\Activate.ps1
 ```
 
+表达式解析（`expr` 字段的「中缀 / LaTeX / 预设名」语法）依赖 **`lark`**（已在 `pyproject.toml` 声明）。
+请在 penv 中手工补装（本项目约定不代装依赖）：
+
+```powershell
+p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m pip install "lark>=1.1.0"
+```
+
+> 缺装时 `fill-op` 与表达式解析路径会以双语错误 `expr.parse.lark_missing` 提示；普通
+> `new-op`（不含 expr）/ `gen-msopgen` / `render` / `quickstart` 不受影响。
+
 ## 使用示例
 
 CLI 提供四个子命令（`cann-ophelper` 已注册为 console script，激活 `penv` 后可直呼）：
@@ -57,6 +67,7 @@ CLI 提供四个子命令（`cann-ophelper` 已注册为 console script，激活
 | `new-op [--from add] [--yes] [--out <yaml>]` | 交互逐问收集算子需求：算子类型、SoC、描述、输入/输出张量及每个张量的 name/param_type/dtype×format（按官方并行数组一次输入逗号分隔列表）、可选 shape，边问边校验。`--from add` 用内置 Add 预设预填每项、回车即确认。确认后落盘 OpSpec YAML。 |
 | `gen-msopgen <yaml> [--proto-out <json>] [--proto <json>]` | 校验并预览算子元信息，拼装一条完整的 `msopgen` 命令与云端执行说明（本身无副作用）。加 `--proto-out` 会把 spec **无损导出**为官方原型 JSON 落盘，且命令中 `-i` 自动指向该导出文件；加 `--proto` 可指向你已准备的云端原型路径。两者都没给时，`-i` 沿用官方示例默认路径并**警告**它仅是演示样例。 |
 | `render <yaml> --out <目录>` | 按模板渲染 `op_kernel`/`op_host` 三产物并写入 `--out` 目录（覆盖该目录下已有同名文件，常用于覆盖云端拷回的 msopgen 工程）；省略 `--out` 或加 `--dry-run` 时仅预览不落盘。 |
+| `fill-op <yaml> <工程根> [--dry-run]` | **表达式驱动填充**：读 spec 的 `expr` 意图 → 解析/降级 → 校验空壳工程画像（入口/张量/dtype/soc 必须与 spec 一致）→ 整文件重写 `op_kernel`/`op_host` 三文件（其余文件不动），并在工程根生成 `verify/` 一键云端验证资产（确定性输入 + `golden.bin` + aclnn runner + `run_verify.sh`）。表达式支持中缀、LaTeX 子集与预设名（解析依赖 `lark`，需装入 penv）。 |
 | `quickstart` | 打印「从零到云端 CANN 工程」的可复制命令清单（new-op → YAML → 原型 JSON → 云端 msopgen → render），无副作用。 |
 
 ```powershell
@@ -104,12 +115,54 @@ p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper render myop.y
 3. 复制命令到云端 CANN Lab 执行，获得初始工程并拷回本地。
 4. `render ... --out <本地工程目录>` 将三产物写回该工程，随后整体上传云端编译验证。
 
+## 表达式驱动的「零到一键跑通」流程
+
+在 spec YAML 顶层写一个元素级计算意图（`expr` 字段），如：
+
+```yaml
+op_type: AscTry
+soc_version: ascend910b4
+inputs:
+  - name: A
+    param_type: required
+    dtype: [float]
+    format: [ND]
+  - name: B
+    param_type: required
+    dtype: [float]
+    format: [ND]
+outputs:
+  - name: C
+    param_type: required
+    dtype: [float]
+    format: [ND]
+expr: A + 2/sigmoid(B) = C
+```
+
+`expr` 支持：张量名直接引用、数字常量、`+ - * /`、一元负号、函数调用（`sigmoid/exp/abs` 等，
+以规则库为准，见 `docs/expr-rules.md`），也可用 LaTeX 子集或预设名（`add`、`sigmoid` …）。
+
+```powershell
+# ① 在云端用 msopgen 生成空壳工程（spec → --proto-out 导出原型 JSON → 云端执行命令 → 拷回本地）
+# ② fill-op：校验空壳 → 整文件重写 kernel/tiling/host 三文件 → 生成 verify/ 验证资产
+p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper fill-op asctry.yaml cloud_shell\asc_try
+
+# ③ 预览（--dry-run 只校验不写盘）
+p:\Dev\CANN_Learning_Refs\penv\Scripts\python.exe -m cann_ophelper fill-op asctry.yaml cloud_shell\asc_try --dry-run
+
+# ④ 把整个工程目录上传回云端，一键「编译 + 部署 + 单算子运行 + 数值比对」：
+#    （该脚本自动 bash build.sh、安装算子 run 包、编译 aclnn runner 并比对 output.bin 与 golden.bin）
+# 云端: bash cloud_shell/asc_try/verify/run_verify.sh    # 输出 TEST PASSED 即数值正确
+```
+
 ## 目录结构
 
-- `src/cann_ophelper/`：工具源码（CLI / 模型 / msopgen 生成 / 模板引擎 / tiling 策略 / apply 流水线 / 文本检查）。
-- `templates/elementwise/`：Element-Wise 算子的 Kernel / Host 模板（内容源自官方示例的固定模式）。
+- `src/cann_ophelper/`：工具源码（CLI / 模型 / msopgen 生成 / 模板引擎 / tiling 策略 / `expr/` 表达式解析与降级 / `fillgen+apply+verifygen` 填充与验证流水线）。
+- `src/cann_ophelper/expr/`：表达式 IR 子包（AST / grammar.lark / parse / presets 规则库 / evaluate / lower），纯函数、零 CLI 依赖、可独立单测。
 - `examples/`：算子描述 YAML 示例。
-- `docs/official-patterns.md`：官方模式基准（msopgen 命令格式、文件布局、固定代码写法）。
+- `docs/official-patterns.md`：官方模式基准（msopgen 命令格式、文件布局、固定代码写法、fill-op 写盘约定）。
+- `docs/expr-rules.md`：表达式符号 → AscendC/aclnn 指令规则表与出处（代码生成不臆造 API 的依据）。
+- `tests/fixtures/shell_asc_try/`：仿真 msopgen 空壳工程 fixture（fill-op 测试用，含非三文件以验证「只改三文件」）。
 - `scripts/`：环境引导脚本。
 
 ## 参考（只读，不修改）

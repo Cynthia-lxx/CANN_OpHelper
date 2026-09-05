@@ -3,7 +3,7 @@
 > 本文档是本工具生成/修改算子工程代码时的**事实基准**：所有命令、目录结构、代码模式均逐条提取自本地官方文档与官方示例（只读参考目录），并标注出处供复核。
 > 若本文档与任何外部知识冲突，以本文档所引的本地官方原文为准；若官方原文变更，请先更新本文档再修改工具。
 >
-> 更新日期：2026-09-04
+> 更新日期：2026-09-05
 
 ## 0. 出处（Sources）
 
@@ -470,5 +470,42 @@ src/cann_ophelper/template/
 ├── context.py / maps.py / naming.py / model.py   # 不动（变量契约唯一来源）
 └── templates/snippets/    # 片段库：license + kernel_*(10) + tiling_body + host_*(4) = 15 个 .j2
 ```
+
+## 9. 表达式内核生成与 fill-op 写盘约定（2026-09-05 落地）
+
+表达式大轮在既有「spec → proto → msopgen → render」链路之上新增一层**表达式 IR/降级（lowering）**，
+并把「整文件重写三产物」落到 `fill-op`。规则表与出处见 `docs/expr-rules.md`；本工具**不臆造任何
+AscendC/aclnn API**——可引用的接口逐条来自官方文档/示例（§4 的 build/run 链条与
+`09_course_practice/src/09.01_testcase/testcase_6/aclnn_test.cpp`）。
+
+### 9.1 模块与数据流（落地状态）
+
+```
+意图(--expr / LaTeX / 预设 / 向导) → expr/(parse+AST+presets 规则表) → OpSpec.expr
+  → expr/lower (ExprProgram: 有序语句+scratch) → fillgen (三文件文本)
+  → apply (读 msopgen 空壳 → 画像校验 → 整文件重写三文件)
+  → verifygen (确定性 input/golden + aclnn runner + run_verify.sh)  # fill-op 附带
+```
+
+新模块：`expr/` 子包（ast/grammar/parse/presets/evaluate/lower，纯函数可单测，lark 为可选依赖，
+缺省时报双语 `expr.parse.lark_missing`）、`fillgen.py`（`profile_from_spec/build_three_files/files_from_spec`）、
+`apply.py`（`inspect_project/check_shell/apply`）、`verifygen.py`（`verify_files/write_verify_assets`）。
+
+### 9.2 fill-op 对 msopgen 空壳的检查与写盘约定
+
+- **只接受与 spec 同算子的空壳工程**：以文本模式（正则，不做 C++ 语义分析）从 `op_kernel/<entry>.cpp`
+  读取入口函数与 `REGISTER_TILING_DEFAULT`，从 `op_host/<entry>.cpp` 的 `namespace ops` OpDef 读取
+  Input/Output 张量名、`.DataType({ge::DT_*})`、`.AddConfig("...")`；与 spec 画像（entry、输入/输出
+  名集合、每个张量的 dtype 覆盖、soc 族）交叉校验，不一致抛双语 `fill_op.err.*`。
+- **tiling struct 名只读不比对**：tiling 头被 fillgen 整文件重写（如 `AscTryTilingData`），
+  空壳内 `TilingDataTemplate` 不再成为约束。
+- **只写三个文件**：`op_kernel/{entry}.cpp`、`op_kernel/{entry}_tiling.h`、`op_host/{entry}.cpp`
+  （整文件覆盖，LF/UTF-8）；工程内其余文件逐字节不动（测试锁死）。
+- **验证资产**：写入工程根新增 `verify/` 目录——每个已声明输入一个确定性 float32
+  `input_<TENSOR>.bin`（种子 20260905、8×2048 元素、(-1,1)），`golden.bin` 由**与生成内核同一个
+  已降级语句计划**解释得到（逐语句 float32 舍入），`aclnn_<entry>.cpp` 单算子 host runner，
+  `run_verify.sh`（`bash build.sh` → 装 `custom_opp_*.run` → g++ 编译 runner → 执行 → 比对），
+  `verify_result.py`（纯标准库，`rtol=atol=1e-3`）。
+- `fill-op <yaml> <工程根> [--dry-run]` 是唯一 CLI 入口；dry-run 校验并预览，不写盘。
 
 

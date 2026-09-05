@@ -16,6 +16,11 @@ Three commands expose the official msopgen workflow (docs/official-patterns.md):
   With ``--out`` the three files are written into that directory -- the local
   copy of an msopgen project -- overwriting what is already there; without
   ``--out`` (or with ``--dry-run``) it only previews file names and sizes.
+- ``fill-op``: fill a cloud ``msopgen`` empty shell with an expression kernel.
+  It cross-checks the shell profile (entry/tensors/dtypes/soc) against the
+  spec, overwrites exactly the kernel/tiling/host trio, then drops the
+  deterministic ``verify/`` bundle (inputs + golden.bin + aclnn runner +
+  ``run_verify.sh``) that turns the operator into a one-key cloud test.
 - ``quickstart``: print a copy-paste path from zero to a cloud-ready CANN
   project (wizard -> YAML -> prototype JSON -> cloud msopgen -> render); it
   performs no writes.
@@ -38,11 +43,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import __version__
+from .apply import apply as apply_fill
+from .fillgen import files_from_spec
 from .i18n import SUPPORTED_LANGUAGES, set_language, t
 from .model import OpSpec, OpSpecError, TensorSpec
 from .msopgen import build_msopgen_command, show_cloud_instructions
 from .proto import dump_prototype_json
 from .template import render as render_artifacts
+from .verifygen import verify_files, write_verify_assets
 from .wizard import collect_op_spec, resolve_preset
 from .yamlio import dump_op_spec, load_op_spec
 
@@ -355,6 +363,125 @@ def render(
         return
 
     _write_artifacts(console, files, out_dir)
+
+
+@app.command()
+def fill_op(
+    yaml_path: Path = typer.Argument(
+        ...,
+        help="Operator spec YAML that carries an expression ('expr' field).",
+    ),
+    project_dir: Path = typer.Argument(
+        ...,
+        help="Root directory of the msopgen empty-shell project to fill in "
+        "(the one copied back from the cloud, containing op_host/op_kernel).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Verify the shell against the spec and preview the writes; never "
+        "modify files.",
+    ),
+) -> None:
+    """Fill an msopgen empty-shell project with the expression kernel.
+
+    Reads the expression-driven spec (op metadata + 'expr' intent), parses and
+    lowers the expression, regenerates the kernel/tiling/host trio from it and
+    overwrites exactly those three files inside the shell project -- every
+    other file of the msopgen project stays untouched. The shell is first
+    cross-checked (entry function, tensor names/dtypes and AddConfig soc must
+    match the spec), otherwise the command fails with a bilingual error.
+
+    After the write it also drops a deterministic ``verify/`` bundle into the
+    project: one float32 input file per declared tensor, a ``golden.bin``
+    computed by interpreting the same lowered program, an aclnn single-op host
+    runner and a one-key ``bash verify/run_verify.sh`` that builds, deploys,
+    runs and numerically compares the result on the cloud.
+
+    Examples (typical flow):
+
+    # 1) fill the cloud msopgen shell + generate verify assets
+    python -m cann_ophelper fill-op asctry.yaml cloud_shell/asc_try/
+
+    # 2) preview only: validate + list what would be written
+    python -m cann_ophelper fill-op asctry.yaml cloud_shell/asc_try/ --dry-run
+
+    # 3) after uploading the whole project back to the cloud
+    bash cloud_shell/asc_try/verify/run_verify.sh   # -> TEST PASSED
+    """
+    console = _c()
+    spec = _load_spec(yaml_path)
+    console.print(
+        Panel(
+            esc(t("fill_op.info.expr", expr=spec.expr) if spec.expr else t("fill_op.info.empty")),
+            title=t("fill_op.info.title"),
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+    try:
+        _profile, _program, files = files_from_spec(spec)
+    except OpSpecError as exc:
+        _fail(str(exc))
+
+    try:
+        written = apply_fill(project_dir, profile=_profile, files=files, dry_run=dry_run)
+    except OpSpecError as exc:
+        _fail(str(exc))
+
+    # Stage 1: the kernel/tiling/host trio (overwrite, nothing else touched).
+    table = Table(
+        title=t("fill_op.ok.dry" if dry_run else "fill_op.ok.written"),
+        title_style="bold",
+    )
+    table.add_column(t("cli.render.col_file"))
+    table.add_column(t("cli.render.col_bytes"), justify="right")
+    table.add_column(t("cli.render.col_status"))
+    for relpath in sorted(written):
+        table.add_row(
+            esc(relpath),
+            f"{len(files[relpath].encode('utf-8'))} B",
+            esc(t("cli.render.overwritten")),
+        )
+    console.print()
+    console.print(table)
+
+    # Stage 2: cloud verification assets (deterministic inputs + golden +
+    # aclnn runner + one-key run script), only written for a real fill.
+    verify = verify_files(_program, _profile)
+    if dry_run:
+        created = sorted(verify)
+    else:
+        try:
+            created = write_verify_assets(project_dir, _program, _profile)
+        except OpSpecError as exc:
+            _fail(str(exc))
+
+    assets = Table(
+        title=t(
+            "verifygen.ok.dry" if dry_run else "verifygen.ok.created",
+            count=len(created),
+        ),
+        title_style="bold",
+    )
+    assets.add_column(t("cli.render.col_file"))
+    assets.add_column(t("cli.render.col_bytes"), justify="right")
+    for relpath in created:
+        assets.add_row(esc(relpath), f"{len(verify[relpath])} B")
+    console.print()
+    console.print(assets)
+
+    if not dry_run:
+        console.print()
+        console.print(
+            Panel(
+                f"[bold]{esc(t('verifygen.next'))}[/]\n\n{t('verifygen.next.hint')}",
+                title=t("verifygen.title"),
+                border_style="green",
+                expand=False,
+            )
+        )
 
 
 @app.command()

@@ -43,6 +43,7 @@ __all__ = [
     "PRESETS",
     "resolve_preset",
     "collect_op_spec",
+    "collect_expr_answer",
     "parse_int",
     "parse_shape_text",
     "parse_dtype_csv",
@@ -331,3 +332,45 @@ def collect_op_spec(
     )
     spec.validate()
     return spec
+
+
+# ---------------------------------------------------------------------------
+# Element-wise expression collection (gen-op interactive path)
+# ---------------------------------------------------------------------------
+
+
+def _parse_expr_answer(text: str) -> str:
+    """Validate an expression answer; a preset name expands to its expression.
+
+    Empty text means "skip" and is accepted. Raises the bilingual
+    ``expr.parse.*`` error via ``parse_expr`` on bad syntax, so the ask-until
+    loop can re-ask with a red hint.
+    """
+    from .expr import EXPR_PRESETS, parse_expr, resolve_preset_expr
+
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    low = raw.lower()
+    if low in EXPR_PRESETS:
+        raw = resolve_preset_expr(low)[0]
+    # Syntax-only validation; tensor-reference semantics are checked later
+    # against the spec by gen-op / fill-op (the spec may not exist yet here).
+    parse_expr(raw)
+    return raw
+
+
+def collect_expr_answer(
+    console: Optional[Console] = None,
+    *,
+    asker: Callable[..., str] = _default_asker,
+    default: str = "",
+) -> str:
+    """Ask for an element-wise expression (or a preset name) until it parses.
+
+    Returns the accepted expression text (empty string when the user skips).
+    Semantic checks (references belong to the spec inputs, output exists) are
+    intentionally left to gen-op / fill-op, which know the tensor layout.
+    """
+    console = console or Console()
+    return _ask_until(console, asker, t("wizard.prompt.expr"), default, _parse_expr_answer)

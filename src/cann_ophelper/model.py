@@ -318,6 +318,11 @@ class OpSpec:
     - ``attrs``: scalar attributes;
     - ``tiling``: reserved dict for future strategies (not used in this phase);
     - ``description``: one-line operator description.
+    - ``expr``: optional element-wise computation intent, e.g.
+      ``"A + 2/sigmoid(B) = C"``. It is consumed only by the expression-driven
+      codegen flow (gen-op/fill-op); the spec/render paths and the msopgen
+      prototype JSON ignore it, so a spec without ``expr`` keeps byte-identical
+      output.
     """
 
     op_type: str
@@ -328,6 +333,10 @@ class OpSpec:
     tiling: dict = field(default_factory=dict)
     language: str = "cpp"
     description: str = ""
+    #: Optional element-wise computation intent text, e.g. ``"A + 2/sigmoid(B) = C"``.
+    #: Metadata only: never enters the msopgen prototype JSON or the add-family
+    #: render path, so old specs keep byte-identical behavior.
+    expr: str = ""
     #: Metadata: source file path (injected by load_op_spec; not serialized to YAML)
     source: Optional[str] = field(default=None, repr=False, compare=False)
 
@@ -335,6 +344,7 @@ class OpSpec:
         self.op_type = str(self.op_type).strip()
         self.soc_version = str(self.soc_version).strip()
         self.language = str(self.language).strip().lower() or "cpp"
+        self.expr = str(self.expr or "").strip()
 
     # -- Convenience read-only properties --
     @property
@@ -406,6 +416,8 @@ class OpSpec:
             data["tiling"] = self.tiling
         if self.description:
             data["description"] = self.description
+        if self.expr:
+            data["expr"] = self.expr
         return data
 
     @classmethod
@@ -431,6 +443,7 @@ class OpSpec:
             tiling=dict(mapping.get("tiling", {}) or {}),
             language=str(mapping.get("language", "cpp")).strip().lower() or "cpp",
             description=str(mapping.get("description", "")).strip(),
+            expr=str(mapping.get("expr", "") or "").strip(),
         )
         spec.validate()
         return spec

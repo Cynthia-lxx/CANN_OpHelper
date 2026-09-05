@@ -21,6 +21,7 @@ dependencies = [
     "rich>=13.7.0",
     "jinja2>=3.1.4",
     "PyYAML>=6.0.3",
+    "lark>=1.1.0",
 ]
 
 [project.optional-dependencies]

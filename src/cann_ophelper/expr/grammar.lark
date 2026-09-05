@@ -1,0 +1,22 @@
+// CANN_OpHelper element-wise expression grammar (infix math subset).
+// Lowered precedence: unary binds tightest, then * and /, then + and -.
+// Left associativity is handled by the *-repetition rules below and folded by
+// the transformer (left-to-right), matching standard math reading.
+
+?start: sum
+
+?sum: product (("+" | "-") product)*
+?product: unary (("*" | "/") unary)*
+?unary: "-" unary -> neg
+      | "+" unary -> pos
+      | atom
+?atom: NUMBER -> number
+     | NAME "(" [sum ("," sum)*] ")" -> call
+     | NAME -> var
+     | "(" sum ")"
+
+NUMBER: /(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/
+NAME: /[A-Za-z_][A-Za-z0-9_]*/
+
+%import common.WS
+%ignore WS

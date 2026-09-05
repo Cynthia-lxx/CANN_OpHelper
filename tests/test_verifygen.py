@@ -132,6 +132,21 @@ def test_run_script_uses_lf_and_markers() -> None:
     assert run.count("\r") == 0
 
 
+def test_run_script_has_soc_alias_fallback() -> None:
+    # Cloud Lab (910B family, CANN 9.0.0) reports socVersion ascend910_93 while the
+    # op installs under ascend910b -> NNOP lookup fails with 161001 unless the
+    # installed dirs are mirrored under the device soc name before running.
+    program, profile = _add_program_and_profile()
+    run = verify_files(program, profile)["verify/run_verify.sh"].decode("utf-8")
+    assert "ascend910b" in run
+    assert "ascend910_93" in run
+    assert 'cp -r "${KERNEL_ROOT}/ascend910b" "${KERNEL_ROOT}/ascend910_93"' in run
+    assert 'cp -r "${KERNEL_ROOT}/config/ascend910b" "${KERNEL_ROOT}/config/ascend910_93"' in run
+    # alias block is emitted after the install step, before running the op
+    assert run.index("Deploying operator package") < run.index("ascend910_93") < run.index("[4/4]")
+    assert run.count("\r") == 0
+
+
 def test_verify_result_py_is_stdlib_only() -> None:
     program, profile = _add_program_and_profile()
     verify_py = verify_files(program, profile)["verify/verify_result.py"].decode("utf-8")

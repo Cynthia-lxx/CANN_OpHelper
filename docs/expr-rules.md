@@ -75,6 +75,8 @@ source ${HOME}/vendors/customize/bin/set_env.bash
 python3 <run>/verify_result.py
 ```
 
+> 注：本工具生成的 `verify/run_verify.sh` 在第 (1) 步之后额外内置 **soc 目录别名步骤**——CANN 9.0.0 的 910B 系云 Lab 设备 runtime 报 socVersion `ascend910_93`，而算子按 `ascend910b` 编译安装（落 `kernel/{ascend910b, config/ascend910b}`）；NNOP 只按设备 soc 查 `kernel/config/ascend910_93/binary_info_config.json`，目录缺失会 `GetWorkspaceSize → 161001 regInfo failed`。别名步骤在目标目录不存在时 `cp -r` 镜像一份（同 DAV_2201 arch，.o 可互换；build+重装会清掉，故每次运行都重做）。完整案例见 `.codebuddy/memory/ascendc_07_custom_op_project_practice.md` §8。
+
 ### aclnn 调用形态（生成器参照）
 
 - 接口名 = `aclnn<OpCamel>`，三件套：`aclnn<Op>GetWorkspaceSize(...)` / `aclnn<Op>(workspace, workspaceSize, executor, stream)`，头文件 `aclnn_<op_snake>.h`；见 DOC 09.01 testcase_6 `aclnn_test.cpp` L143-157（示例为 `LogSigmoidCustom`）。

@@ -50,7 +50,7 @@ msopgen gen -i Sources/03.02/add_custom.json -c ai_core-ascend910b1 -lan cpp -ou
 - 本资料集中 msopgen 调用**仅出现 `-i / -c / -lan / -out`**，未发现 `-t`、`ccec` 等其它选项（不代表工具没有，仅本套教材未使用）。`[D1][D4]`
 - soc 大小写：msopgen 的 `-c` 在本套教材统一小写 `ai_core-ascend910b1`。大写（如 `Ascend910B4`）仅见于 CPU 仿真等其它工具参数，**不属于 msopgen**，勿混用。`[D1][D4]`
 
-### 1.3 算子原型 JSON（msopgen 的 `-i` 输入）—— 只引用、不生成
+### 1.3 算子原型 JSON（msopgen 的 `-i` 输入）
 
 官方真实样例 `add_custom.json` 全文：`[D2]`
 
@@ -83,7 +83,18 @@ msopgen gen -i Sources/03.02/add_custom.json -c ai_core-ascend910b1 -lan cpp -ou
 - 顶层是数组，每元素描述一个算子（含 `op`、`input_desc`、`output_desc`，可扩展 `attr_desc`）。
 - `param_type`：`required` / `optional`（描述参数是否必选，非方向；方向由 input/output_desc 区分）。
 - `format` / `type` 为**数组**，表示该输入支持的多组 format 与 dtype（按位一一对应，如 `["float16","float"]` 支持 fp16 与 fp32）。
-- **本工具规约（6.4）：不生成、不修改 JSON 原型；只引用用户提供的 JSON 路径。**
+- **本工具规约（6.4）：不臆造无官方依据的字段（如 attr_desc 结构）；原型 JSON 既可引用用户手写的 JSON 路径，也允许基于已校验 OpSpec 机械导出（`cann_ophelper.proto`），导出格式严格对齐上述布局。**
+
+#### 从 OpSpec 导出原型 JSON（`cann_ophelper.proto`）
+
+规则 6.4 允许的「机械导出」入口与保证：
+
+- 输入必须是**通过校验的 `OpSpec`**（通常来自 `new-op` 向导落盘的 YAML）。导出前先跑 `spec.validate()`，非法 soc/dtype/format/重名都会在写盘前抛错。
+- 导出**不包含** shape / soc / description：三者分别是运行时量、`msopgen -c` 参数与工程元数据，原型 JSON 不承载（与官方样例一致）。
+- `attrs` 暂不导出：官方样例未见 `attr_desc` 的确定性写法，宁可报错（`proto.attr_unsupported`）也不臆造格式。
+- 键序与缩进：顶层数组，`op` → `input_desc` / `output_desc`；entry 键序 `name → param_type → format → type`；4 空格缩进（`json.dumps`）。msopgen 只解析 JSON 结构，文本布局无约束。
+- 入口：CLI 为 `gen-msopgen <yaml> --proto-out <json>`；Python 为 `proto.dump_prototype_json(spec, path)` / `prototype_json_text(spec)`。
+- golden 对齐：`tests/test_proto.py` 以官方 `add_custom.json` 做结构等价断言，防止导出漂移。
 
 ### 1.4 msopgen 生成的工程目录结构
 
